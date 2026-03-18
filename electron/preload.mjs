@@ -1,0 +1,30 @@
+import { contextBridge, ipcRenderer } from 'electron'
+
+contextBridge.exposeInMainWorld('electronDesktop', {
+  getDeviceInfo: () => ipcRenderer.invoke('device-info:get'),
+  getInstalledApps: () => ipcRenderer.invoke('apps:list'),
+  listVolumeEntries: (target) => ipcRenderer.invoke('volumes:list-entries', target),
+  getSystemControls: () => ipcRenderer.invoke('system-controls:get'),
+  setSystemControls: (payload) => ipcRenderer.invoke('system-controls:set', payload),
+  executeTerminalCommand: (payload) => ipcRenderer.invoke('terminal:execute', payload),
+  launchApp: (target) => ipcRenderer.invoke('apps:launch', target),
+  onBrowserSyncRequest: (callback) => {
+    const handler = () => callback()
+    ipcRenderer.on('desktop:request-browser-sync', handler)
+    return () => ipcRenderer.removeListener('desktop:request-browser-sync', handler)
+  },
+  onBrowserState: (callback) => {
+    const handler = (_event, payload) => callback(payload)
+    ipcRenderer.on('browser:state', handler)
+    return () => ipcRenderer.removeListener('browser:state', handler)
+  },
+  browser: {
+    syncHost: (payload) => ipcRenderer.send('browser:sync-host', payload),
+    navigate: (url) => ipcRenderer.send('browser:navigate', url),
+    goBack: () => ipcRenderer.send('browser:go-back'),
+    goForward: () => ipcRenderer.send('browser:go-forward'),
+    reload: () => ipcRenderer.send('browser:reload'),
+    openExternal: (url) => ipcRenderer.send('browser:open-external', url),
+    hide: () => ipcRenderer.send('browser:hide'),
+  },
+})

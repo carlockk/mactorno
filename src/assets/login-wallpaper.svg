@@ -1,0 +1,60 @@
+<svg width="1600" height="1000" viewBox="0 0 1600 1000" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1600" height="1000" fill="url(#bg)"/>
+  <g filter="url(#blurA)" opacity="0.95">
+    <path d="M81 738C220 564 360 466 546 448C711 432 883 529 1045 478C1200 429 1323 295 1519 108V1000H81V738Z" fill="url(#ridgeA)"/>
+  </g>
+  <g filter="url(#blurB)" opacity="0.92">
+    <path d="M-88 835C93 641 220 559 408 553C554 548 691 621 814 611C961 599 1093 480 1259 327C1360 234 1455 166 1600 75V1000H-88V835Z" fill="url(#ridgeB)"/>
+  </g>
+  <g filter="url(#blurC)" opacity="0.86">
+    <path d="M-154 940C70 751 215 689 394 691C548 692 683 760 802 755C972 748 1124 624 1287 472C1394 372 1495 282 1665 176V1000H-154V940Z" fill="url(#ridgeC)"/>
+  </g>
+  <ellipse cx="1180" cy="165" rx="314" ry="156" fill="url(#glowA)" opacity="0.64"/>
+  <ellipse cx="418" cy="182" rx="254" ry="132" fill="url(#glowB)" opacity="0.34"/>
+  <ellipse cx="1268" cy="731" rx="358" ry="192" fill="url(#glowC)" opacity="0.18"/>
+  <defs>
+    <linearGradient id="bg" x1="205" y1="62" x2="1366" y2="922" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#10254D"/>
+      <stop offset="0.28" stop-color="#214E97"/>
+      <stop offset="0.56" stop-color="#615AB1"/>
+      <stop offset="0.79" stop-color="#C96B8D"/>
+      <stop offset="1" stop-color="#F2A06C"/>
+    </linearGradient>
+    <linearGradient id="ridgeA" x1="485" y1="410" x2="1333" y2="982" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7B887"/>
+      <stop offset="0.48" stop-color="#E98272"/>
+      <stop offset="1" stop-color="#A34E82"/>
+    </linearGradient>
+    <linearGradient id="ridgeB" x1="334" y1="493" x2="1328" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7D6AA"/>
+      <stop offset="0.43" stop-color="#F59D72"/>
+      <stop offset="1" stop-color="#6D55AB"/>
+    </linearGradient>
+    <linearGradient id="ridgeC" x1="295" y1="627" x2="1219" y2="1000" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F9E0C1"/>
+      <stop offset="0.51" stop-color="#FFB076"/>
+      <stop offset="1" stop-color="#5B4F98"/>
+    </linearGradient>
+    <radialGradient id="glowA" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1180 165) rotate(90) scale(156 314)">
+      <stop stop-color="#C2F0FF"/>
+      <stop offset="1" stop-color="#C2F0FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowB" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(418 182) rotate(90) scale(132 254)">
+      <stop stop-color="#FFD9B7"/>
+      <stop offset="1" stop-color="#FFD9B7" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glowC" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(1268 731) rotate(90) scale(192 358)">
+      <stop stop-color="#8FE0FF"/>
+      <stop offset="1" stop-color="#8FE0FF" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blurA" x="1" y="28" width="1598" height="1052" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
+    <filter id="blurB" x="-168" y="-5" width="1848" height="1085" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
+    <filter id="blurC" x="-234" y="96" width="1979" height="984" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="40"/>
+    </filter>
+  </defs>
+</svg>
