@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
+import { shell } from 'electron'
 
 function toGb(value) {
   return (value / 1024 / 1024 / 1024).toFixed(1)
@@ -67,7 +68,7 @@ function walkFiles(dirPath, maxDepth, result = [], depth = 0) {
 function uniqueApps(items) {
   const map = new Map()
   for (const item of items) {
-    const key = `${item.name.toLowerCase()}::${item.target.toLowerCase()}`
+    const key = `${item.name.toLowerCase()}::${(item.launchTarget || item.target).toLowerCase()}`
     if (!map.has(key)) {
       map.set(key, item)
     }
@@ -236,7 +237,50 @@ async function getWindowsApps() {
         id: Buffer.from(filePath).toString('base64url'),
         name,
         target: filePath,
+        launchTarget: filePath,
         source: 'start-menu',
+        icon: null,
+      })
+    }
+  }
+
+  const portableDirs = [
+    { dir: path.join(process.env.USERPROFILE ?? os.homedir(), 'Desktop'), depth: 2, source: 'desktop-portable' },
+    { dir: path.join(process.env.USERPROFILE ?? os.homedir(), 'Downloads'), depth: 2, source: 'downloads-portable' },
+    { dir: process.env.ProgramFiles ?? 'C:\\Program Files', depth: 2, source: 'program-files' },
+    { dir: process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', depth: 2, source: 'program-files-x86' },
+  ]
+
+  for (const location of portableDirs) {
+    if (!location.dir || !fs.existsSync(location.dir)) {
+      continue
+    }
+
+    for (const filePath of walkFiles(location.dir, location.depth)) {
+      if (path.extname(filePath).toLowerCase() !== '.exe') {
+        continue
+      }
+
+      const normalizedPath = filePath.toLowerCase()
+      if (
+        normalizedPath.includes('\\windows\\') ||
+        normalizedPath.includes('\\microsoft\\edge\\') ||
+        normalizedPath.includes('\\windowsapps\\')
+      ) {
+        continue
+      }
+
+      const name = path.basename(filePath, '.exe').replace(/[-_]+/g, ' ').trim()
+      if (!name || /uninstall|desinstalar|remove|repair|update|setup|install|helper|crash/i.test(name)) {
+        continue
+      }
+
+      apps.push({
+        id: Buffer.from(`exe:${filePath}`).toString('base64url'),
+        name,
+        target: filePath,
+        launchTarget: filePath,
+        source: location.source,
         icon: null,
       })
     }
@@ -255,7 +299,7 @@ async function getWindowsApps() {
           const shortcut = await withTimeout(resolveWindowsShortcut(app.target), 350)
           const target = shortcut?.TargetPath || app.target
           const icon = await withTimeout(extractWindowsIconData(target, shortcut?.IconLocation ?? ''), 350)
-          return { ...app, target, icon }
+          return { ...app, target, launchTarget: app.target, icon }
         }
 
         if (extension === '.url') {
@@ -264,12 +308,12 @@ async function getWindowsApps() {
           const icon = shortcut.iconFile
             ? await withTimeout(extractWindowsIconData(target, shortcut.iconFile), 350)
             : null
-          return { ...app, target, icon }
+          return { ...app, target, launchTarget: target, icon }
         }
 
         if (extension === '.exe') {
           const icon = await withTimeout(extractWindowsIconData(app.target), 350)
-          return { ...app, icon }
+          return { ...app, launchTarget: app.target, icon }
         }
       } catch {
         return app
@@ -305,6 +349,7 @@ function getWindowsAppsFallback() {
         id: Buffer.from(filePath).toString('base64url'),
         name,
         target: filePath,
+        launchTarget: filePath,
         source: 'start-menu',
         icon: null,
       })
@@ -329,6 +374,7 @@ function getMacApps() {
         id: Buffer.from(fullPath).toString('base64url'),
         name: entry.name.replace(/\.app$/i, ''),
         target: fullPath,
+        launchTarget: fullPath,
         source: 'applications',
         icon: resolveMacIcon(fullPath),
       })
@@ -365,6 +411,7 @@ function getLinuxApps() {
           id: Buffer.from(filePath).toString('base64url'),
           name: nameMatch[1].trim(),
           target: normalizeExecTarget(execMatch[1].trim()),
+          launchTarget: filePath,
           source: 'desktop-entry',
           icon: resolveLinuxIcon(iconMatch?.[1]?.trim() ?? ''),
         })
@@ -708,25 +755,35 @@ export async function setSystemControls(nextControls) {
 }
 
 export async function launchApp(target) {
+  if (!target || typeof target !== 'string') {
+    return { ok: false, error: 'No se recibio una ruta valida para abrir.' }
+  }
+
+  if (/^https?:\/\//i.test(target)) {
+    await shell.openExternal(target)
+    return { ok: true, error: null }
+  }
+
   if (process.platform === 'win32') {
-    const escapedTarget = target.replace(/"/g, '""')
-    const command = target.startsWith('http')
-      ? `Start-Process "${escapedTarget}"`
-      : `Start-Process -FilePath "${escapedTarget}"`
-    spawn('powershell.exe', ['-NoProfile', '-Command', command], {
-      detached: true,
-      stdio: 'ignore',
-    }).unref()
-    return
+    if (!fs.existsSync(target)) {
+      return { ok: false, error: `La ruta no existe o no esta disponible: ${target}` }
+    }
+
+    const error = await shell.openPath(target)
+    return {
+      ok: !error,
+      error: error || null,
+    }
   }
 
   if (process.platform === 'darwin') {
     spawn('open', [target], { detached: true, stdio: 'ignore' }).unref()
-    return
+    return { ok: true, error: null }
   }
 
   const linuxTarget = target.startsWith('/') ? target : normalizeExecTarget(target).split(' ')[0]
   spawn('xdg-open', [linuxTarget], { detached: true, stdio: 'ignore' }).unref()
+  return { ok: true, error: null }
 }
 
 export async function executeTerminalCommand(command, cwd) {

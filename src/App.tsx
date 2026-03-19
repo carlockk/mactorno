@@ -126,6 +126,7 @@ type InstalledApp = {
   id: string
   name: string
   target: string
+  launchTarget?: string
   source: string
   icon?: string | null
 }
@@ -140,7 +141,7 @@ type CustomDockItem = {
   name: string
   icon: DockIconSpec
   accent: string
-  kind: 'url' | 'app'
+  kind: 'url' | 'app' | 'finder-route'
   target: string
 }
 
@@ -156,13 +157,52 @@ type AppVisualOverrides = Partial<
 
 type ContextMenuState =
   | {
+      type: 'finder'
       x: number
       y: number
       windowId: string
       route: FinderRoute
       label: string
     }
+  | {
+      type: 'dock-app'
+      x: number
+      y: number
+      appId: AppId
+      label: string
+    }
+  | {
+      type: 'dock-custom'
+      x: number
+      y: number
+      itemId: string
+      label: string
+    }
+  | {
+      type: 'dock-volume'
+      x: number
+      y: number
+      mount: string
+      label: string
+    }
   | null
+
+type AppMenuAction = 'media-open' | 'media-reveal' | 'media-open-system' | 'window-minimize' | 'window-close'
+  | 'media-open-finder'
+  | 'photo-zoom-in'
+  | 'photo-zoom-out'
+  | 'photo-rotate-right'
+  | 'photo-reset-view'
+  | 'video-toggle-play'
+  | 'video-restart'
+  | 'video-toggle-mute'
+  | 'video-speed-normal'
+  | 'video-speed-fast'
+
+type PhotoViewState = {
+  zoom: number
+  rotation: number
+}
 
 type SystemControlsState = {
   brightness: number
@@ -360,6 +400,17 @@ function getDesktopVolumeIconSrc(volume: VolumeInfo) {
   return getDesktopVolumeKind(volume) === 'drive' ? '/hd.png' : '/sd.png'
 }
 
+function createVolumeDockItem(volume: VolumeInfo): CustomDockItem {
+  return {
+    id: `volume-${encodeURIComponent(volume.mount)}`,
+    name: volume.name,
+    target: createVolumeRoute(volume.mount),
+    kind: 'finder-route',
+    icon: { kind: 'image', value: getDesktopVolumeIconSrc(volume) },
+    accent: 'transparent',
+  }
+}
+
 function formatVolumeSize(sizeBytes: number | null) {
   if (sizeBytes === null || Number.isNaN(sizeBytes)) {
     return 'Tamano no disponible'
@@ -389,6 +440,10 @@ function isVideoEntry(entry: VolumeEntry) {
 }
 
 function getMediaSource(filePath: string) {
+  if (/^blob:/i.test(filePath)) {
+    return filePath
+  }
+
   return window.electronDesktop
     ? `mactorno-media://${encodeURIComponent(filePath)}`
     : `/api/media-file?path=${encodeURIComponent(filePath)}`
@@ -746,6 +801,7 @@ function DockIconButton({
   draggable = false,
   onDragStart,
   onDragEnd,
+  onContextMenu,
 }: {
   id: string
   name: string
@@ -759,6 +815,7 @@ function DockIconButton({
   draggable?: boolean
   onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
   onDragEnd?: (event: React.DragEvent<HTMLButtonElement>) => void
+  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void
 }) {
   const itemRef = useRef<HTMLButtonElement | null>(null)
   const [hovered, setHovered] = useState(false)
@@ -798,6 +855,7 @@ function DockIconButton({
       onMouseLeave={() => setHovered(false)}
       onDragStartCapture={onDragStart}
       onDragEndCapture={onDragEnd}
+      onContextMenu={onContextMenu}
     >
       <AnimatePresence>
         {hovered ? (
@@ -826,7 +884,15 @@ function DockIconButton({
   )
 }
 
-function VideoPlayer({ src }: { src: string }) {
+function VideoPlayer({
+  src,
+  videoRef,
+  onPlaybackStateChange,
+}: {
+  src: string
+  videoRef?: (node: HTMLVideoElement | null) => void
+  onPlaybackStateChange?: () => void
+}) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [aspectRatio, setAspectRatio] = useState(16 / 10)
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 })
@@ -871,11 +937,17 @@ function VideoPlayer({ src }: { src: string }) {
           src={src}
           controls
           preload="metadata"
-          onLoadedMetadata={(event) => {
+          ref={videoRef}
+          onPlay={onPlaybackStateChange}
+          onPause={onPlaybackStateChange}
+          onVolumeChange={onPlaybackStateChange}
+          onRateChange={onPlaybackStateChange}
+          onLoadedMetadata={async (event) => {
             const video = event.currentTarget
             if (video.videoWidth && video.videoHeight) {
               setAspectRatio(video.videoWidth / video.videoHeight)
             }
+            onPlaybackStateChange?.()
           }}
         />
       </div>
@@ -883,7 +955,7 @@ function VideoPlayer({ src }: { src: string }) {
   )
 }
 
-function PhotoViewer({ src, alt }: { src: string; alt: string }) {
+function PhotoViewer({ src, alt, zoom = 1, rotation = 0 }: { src: string; alt: string; zoom?: number; rotation?: number }) {
   const stageRef = useRef<HTMLDivElement | null>(null)
   const [aspectRatio, setAspectRatio] = useState(4 / 3)
   const [frameSize, setFrameSize] = useState({ width: 0, height: 0 })
@@ -928,6 +1000,7 @@ function PhotoViewer({ src, alt }: { src: string; alt: string }) {
           src={src}
           alt={alt}
           draggable={false}
+          style={{ transform: `scale(${zoom}) rotate(${rotation}deg)` }}
           onLoad={(event) => {
             const image = event.currentTarget
             if (image.naturalWidth && image.naturalHeight) {
@@ -991,6 +1064,7 @@ function App() {
   const windowFrameRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const browserHostRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const dockRef = useRef<HTMLDivElement | null>(null)
+  const menuBarRef = useRef<HTMLDivElement | null>(null)
   const launcherPanelRef = useRef<HTMLDivElement | null>(null)
   const controlCenterRef = useRef<HTMLDivElement | null>(null)
   const runningGenies = useRef(new Set<string>())
@@ -1001,8 +1075,51 @@ function App() {
   const pendingDockMouseX = useRef<number | null>(null)
   const dockMouseFrameRef = useRef<number | null>(null)
   const [dockCenters, setDockCenters] = useState<Record<string, number>>({})
+  const [openAppMenu, setOpenAppMenu] = useState<string | null>(null)
+  const [photoViewStates, setPhotoViewStates] = useState<Record<string, PhotoViewState>>({})
+  const [videoPlaybackState, setVideoPlaybackState] = useState<Record<string, { playing: boolean; muted: boolean; rate: number }>>({})
   const wallpaperPreset = WALLPAPER_PRESETS.find((preset) => preset.id === wallpaperId) ?? WALLPAPER_PRESETS[0]
   const activeNote = notes.find((note) => note.id === selectedNoteId) ?? notes[0] ?? null
+  const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
+  const visibleDockAppIds = useMemo(() => {
+    const runningDockableApps = windows
+      .map((item) => item.appId)
+      .filter((appId, index, current) =>
+        current.indexOf(appId) === index && getApp(appId).dockable && !dockItems.includes(appId),
+      )
+
+    return [...dockItems, ...runningDockableApps]
+  }, [dockItems, windows])
+  const visibleVolumeDockItems = useMemo(() => {
+    const pinnedTargets = new Set(
+      customDockItems
+        .filter((item) => item.kind === 'finder-route')
+        .map((item) => item.target),
+    )
+
+    const openMounts = windows
+      .filter((item) => item.appId === 'finder' && item.finderState && !item.genie?.removeOnFinish)
+      .map((item) => getVolumeMountFromRoute(getActiveFinderRoute(item.finderState)))
+      .filter((mount): mount is string => !!mount)
+
+    return [...new Set(openMounts)]
+      .map((mount) => deviceInfo?.volumes.find((volume) => volume.mount === mount))
+      .filter((volume): volume is VolumeInfo => !!volume)
+      .filter((volume) => !pinnedTargets.has(createVolumeRoute(volume.mount)))
+      .map((volume) => createVolumeDockItem(volume))
+  }, [customDockItems, deviceInfo?.volumes, windows])
+
+  function openContextMenuAt(payload: Record<string, unknown>, x: number, y: number) {
+    const estimatedWidth = 240
+    const estimatedHeight = 180
+    const margin = 12
+
+    setContextMenu({
+      ...payload,
+      x: Math.min(x, Math.max(margin, window.innerWidth - estimatedWidth - margin)),
+      y: Math.min(y, Math.max(margin, window.innerHeight - estimatedHeight - margin)),
+    } as ContextMenuState)
+  }
 
   function getDesktopBounds() {
     return {
@@ -1221,6 +1338,17 @@ function App() {
   useEffect(() => {
     const timer = window.setInterval(() => setClock(formatTime(new Date())), 30_000)
     return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    function handleMenuPointerDown(event: MouseEvent) {
+      if (!menuBarRef.current?.contains(event.target as Node | null)) {
+        setOpenAppMenu(null)
+      }
+    }
+
+    window.addEventListener('mousedown', handleMenuPointerDown)
+    return () => window.removeEventListener('mousedown', handleMenuPointerDown)
   }, [])
 
   useEffect(() => {
@@ -1705,21 +1833,25 @@ function App() {
                 item.genie.mode === 'opening'
                   ? [
                       { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 49, 3, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 0 },
-                      { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.min(0.18, scaleX + 0.015)}, ${Math.min(0.42, scaleY + 0.07)})`, clipPath: createLampClipPath(anchorX, 36, 8, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.18 },
-                      { transform: `translate(${deltaX * 0.34}px, ${deltaY * 0.48}px) scale(${Math.min(0.72, scaleX + 0.26)}, ${Math.min(0.86, scaleY + 0.18)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.34), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.96', offset: 0.56 },
-                      { transform: `translate(${deltaX * 0.08}px, ${deltaY * 0.12}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.84 },
+                      { transform: `translate(${deltaX * 0.9}px, ${deltaY * 0.93}px) scale(${Math.min(0.14, scaleX + 0.01)}, ${Math.min(0.3, scaleY + 0.04)})`, clipPath: createLampClipPath(anchorX, 41, 6, Math.max(3.2, narrowTip * 1.15), bias * 0.9), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.12 },
+                      { transform: `translate(${deltaX * 0.72}px, ${deltaY * 0.82}px) scale(${Math.min(0.2, scaleX + 0.02)}, ${Math.min(0.46, scaleY + 0.09)})`, clipPath: createLampClipPath(anchorX, 34, 9, mediumTip, bias * 0.72), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.89', offset: 0.26 },
+                      { transform: `translate(${deltaX * 0.5}px, ${deltaY * 0.64}px) scale(${Math.min(0.46, scaleX + 0.14)}, ${Math.min(0.68, scaleY + 0.15)})`, clipPath: createLampClipPath(anchorX, 22, 11, Math.max(10, wideTip * 0.82), bias * 0.5), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.93', offset: 0.46 },
+                      { transform: `translate(${deltaX * 0.26}px, ${deltaY * 0.36}px) scale(${Math.min(0.8, scaleX + 0.31)}, ${Math.min(0.9, scaleY + 0.19)})`, clipPath: createLampClipPath(anchorX, 12, 12, wideTip, bias * 0.26), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.68 },
+                      { transform: `translate(${deltaX * 0.08}px, ${deltaY * 0.12}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.9 },
                       { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 1 },
                     ]
                   : [
                       { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0 },
-                      { transform: `translate(${deltaX * 0.08}px, ${deltaY * 0.12}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.16 },
-                      { transform: `translate(${deltaX * 0.34}px, ${deltaY * 0.48}px) scale(${Math.max(0.4, 1 - (1 - scaleX) * 0.3)}, ${Math.max(0.64, 1 - (1 - scaleY) * 0.12)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.34), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.96', offset: 0.46 },
-                      { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.max(0.12, scaleX + 0.015)}, ${Math.max(0.22, scaleY + 0.06)})`, clipPath: createLampClipPath(anchorX, 36, 8, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.84 },
+                      { transform: `translate(${deltaX * 0.08}px, ${deltaY * 0.12}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.1 },
+                      { transform: `translate(${deltaX * 0.26}px, ${deltaY * 0.36}px) scale(${Math.max(0.56, 1 - (1 - scaleX) * 0.18)}, ${Math.max(0.76, 1 - (1 - scaleY) * 0.08)})`, clipPath: createLampClipPath(anchorX, 12, 12, wideTip, bias * 0.26), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.3 },
+                      { transform: `translate(${deltaX * 0.5}px, ${deltaY * 0.64}px) scale(${Math.max(0.34, scaleX + 0.14)}, ${Math.max(0.56, scaleY + 0.15)})`, clipPath: createLampClipPath(anchorX, 22, 11, Math.max(10, wideTip * 0.82), bias * 0.5), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.93', offset: 0.54 },
+                      { transform: `translate(${deltaX * 0.72}px, ${deltaY * 0.82}px) scale(${Math.max(0.18, scaleX + 0.02)}, ${Math.max(0.3, scaleY + 0.09)})`, clipPath: createLampClipPath(anchorX, 34, 9, mediumTip, bias * 0.72), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.89', offset: 0.76 },
+                      { transform: `translate(${deltaX * 0.9}px, ${deltaY * 0.93}px) scale(${Math.max(0.1, scaleX + 0.01)}, ${Math.max(0.18, scaleY + 0.04)})`, clipPath: createLampClipPath(anchorX, 41, 6, Math.max(3.2, narrowTip * 1.15), bias * 0.9), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.9 },
                       { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 49, 3, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 1 },
                     ]
 
               return frameNode.animate(frames, {
-                duration: 680,
+                duration: 820,
                 easing: 'cubic-bezier(0.2, 0.85, 0.22, 1)',
                 fill: 'both',
               })
@@ -1761,6 +1893,148 @@ function App() {
   )
   const activeApp = activeWindow ? getResolvedApp(activeWindow.appId) : getResolvedApp('finder')
   const topZIndex = useMemo(() => windows.reduce((max, item) => Math.max(max, item.zIndex), 0), [windows])
+
+  function getAppMenuActions(windowItem: WindowState | undefined, menuLabel: string): Array<{ id: AppMenuAction; label: string }> {
+    if (!windowItem) {
+      return []
+    }
+
+    if (windowItem.appId === 'photos') {
+      switch (menuLabel) {
+        case 'Archivo':
+          return [
+            { id: 'media-open', label: 'Abrir imagen...' },
+            { id: 'media-open-finder', label: 'Buscar en Finder' },
+            { id: 'media-reveal', label: 'Mostrar en carpeta' },
+            { id: 'media-open-system', label: 'Abrir con el sistema' },
+          ]
+        case 'Imagen':
+          return [
+            { id: 'photo-zoom-in', label: 'Acercar' },
+            { id: 'photo-zoom-out', label: 'Alejar' },
+            { id: 'photo-rotate-right', label: 'Rotar a la derecha' },
+            { id: 'photo-reset-view', label: 'Restablecer vista' },
+            { id: 'media-reveal', label: 'Mostrar imagen en carpeta' },
+            { id: 'media-open-system', label: 'Abrir con app externa' },
+          ]
+        case 'Ventana':
+          return [
+            { id: 'window-minimize', label: 'Minimizar ventana' },
+            { id: 'window-close', label: 'Cerrar ventana' },
+          ]
+        default:
+          return []
+      }
+    }
+
+    if (windowItem.appId === 'videos') {
+      const playback = videoPlaybackState[windowItem.id] ?? { playing: false, muted: false, rate: 1 }
+      switch (menuLabel) {
+        case 'Archivo':
+          return [
+            { id: 'media-open', label: 'Abrir video...' },
+            { id: 'media-open-finder', label: 'Buscar en Finder' },
+            { id: 'media-reveal', label: 'Mostrar en carpeta' },
+            { id: 'media-open-system', label: 'Abrir con el sistema' },
+          ]
+        case 'Reproduccion':
+          return [
+            { id: 'video-toggle-play', label: playback.playing ? 'Pausar' : 'Reproducir' },
+            { id: 'video-restart', label: 'Volver al inicio' },
+            { id: 'video-toggle-mute', label: playback.muted ? 'Activar sonido' : 'Silenciar' },
+            { id: 'video-speed-normal', label: 'Velocidad normal' },
+            { id: 'video-speed-fast', label: 'Velocidad x1.5' },
+            { id: 'media-open-system', label: 'Abrir con app externa' },
+          ]
+        case 'Ventana':
+          return [
+            { id: 'window-minimize', label: 'Minimizar ventana' },
+            { id: 'window-close', label: 'Cerrar ventana' },
+          ]
+        default:
+          return []
+      }
+    }
+
+    return []
+  }
+
+  async function runAppMenuAction(action: AppMenuAction) {
+    if (!activeWindow) {
+      return
+    }
+
+    setOpenAppMenu(null)
+
+    switch (action) {
+      case 'media-open':
+        await pickMediaFile(activeWindow.id, activeWindow.appId === 'videos' ? 'video' : 'photo')
+        return
+      case 'photo-zoom-in':
+        updatePhotoViewState(activeWindow.id, (state) => ({ ...state, zoom: Math.min(4, Number((state.zoom + 0.25).toFixed(2))) }))
+        return
+      case 'photo-zoom-out':
+        updatePhotoViewState(activeWindow.id, (state) => ({ ...state, zoom: Math.max(0.5, Number((state.zoom - 0.25).toFixed(2))) }))
+        return
+      case 'photo-rotate-right':
+        updatePhotoViewState(activeWindow.id, (state) => ({ ...state, rotation: (state.rotation + 90) % 360 }))
+        return
+      case 'photo-reset-view':
+        resetPhotoView(activeWindow.id)
+        return
+      case 'media-reveal':
+        if (activeWindow.mediaPath) {
+          await revealSystemPath(activeWindow.mediaPath)
+        }
+        return
+      case 'media-open-finder':
+        if (activeWindow.mediaPath) {
+          openFinderWindow(createFinderRouteForFilePath(activeWindow.mediaPath))
+        }
+        return
+      case 'media-open-system':
+        if (activeWindow.mediaPath) {
+          await openSystemPath(activeWindow.mediaPath)
+        }
+        return
+      case 'window-minimize':
+        minimizeWindow(activeWindow.id)
+        return
+      case 'window-close':
+        closeWindow(activeWindow.id)
+        return
+      case 'video-toggle-play':
+        await withVideoElement(activeWindow.id, async (video) => {
+          if (video.paused) {
+            await video.play().catch(() => {})
+          } else {
+            video.pause()
+          }
+        })
+        return
+      case 'video-restart':
+        await withVideoElement(activeWindow.id, (video) => {
+          video.currentTime = 0
+          void video.play().catch(() => {})
+        })
+        return
+      case 'video-toggle-mute':
+        await withVideoElement(activeWindow.id, (video) => {
+          video.muted = !video.muted
+        })
+        return
+      case 'video-speed-normal':
+        await withVideoElement(activeWindow.id, (video) => {
+          video.playbackRate = 1
+        })
+        return
+      case 'video-speed-fast':
+        await withVideoElement(activeWindow.id, (video) => {
+          video.playbackRate = 1.5
+        })
+        return
+    }
+  }
 
   function focusWindow(id: string) {
     setWindows((current) =>
@@ -1875,7 +2149,7 @@ function App() {
       return
     }
 
-    openFinderWindow(createVolumeRoute(mount))
+    openOrFocusFinderRoute(createVolumeRoute(mount))
   }
 
   function openSafariWindow(url?: string) {
@@ -1899,6 +2173,9 @@ function App() {
     setLauncherOpen(false)
     const existing = windows.find((item) => item.appId === appId)
     if (existing) {
+      if (appId === 'photos') {
+        resetPhotoView(existing.id)
+      }
       setWindows((current) =>
         current.map((item) =>
           item.id === existing.id
@@ -1917,6 +2194,9 @@ function App() {
     }
 
     const nextWindow = createWindow(appId)
+    if (appId === 'photos') {
+      resetPhotoView(nextWindow.id)
+    }
     nextWindow.title = entry.name
     nextWindow.mediaPath = entry.path
     nextWindow.width = appId === 'photos' ? 880 : 960
@@ -2158,11 +2438,73 @@ function App() {
     addCustomDockItem({
       id: `app-${app.id}`,
       name: app.name,
-      target: app.target,
+      target: app.launchTarget || app.target,
       kind: 'app',
       icon: { kind: 'glyph', value: '💻' },
       accent: 'linear-gradient(135deg, #6ec3ff 0%, #4361ff 100%)',
     })
+  }
+
+  function pinBuiltInAppToDock(appId: AppId) {
+    if (!getApp(appId).dockable) {
+      return
+    }
+
+    setDockItems((current) => current.includes(appId) ? current : [...current, appId])
+  }
+
+  function unpinBuiltInAppFromDock(appId: AppId) {
+    setDockItems((current) => current.filter((item) => item !== appId))
+  }
+
+  function pinVolumeToDock(mount: string) {
+    const volume = deviceInfo?.volumes.find((item) => item.mount === mount)
+    if (!volume) {
+      return
+    }
+
+    addCustomDockItem(createVolumeDockItem(volume))
+  }
+
+  function openOrFocusFinderRoute(route: FinderRoute, dockItemId?: string) {
+    const targetMount = getVolumeMountFromRoute(route)
+    const existingFinder = windows.find((item) => {
+      if (item.appId !== 'finder' || !item.finderState) {
+        return false
+      }
+
+      const currentRoute = getActiveFinderRoute(item.finderState)
+      if (targetMount) {
+        return getVolumeMountFromRoute(currentRoute) === targetMount
+      }
+
+      return currentRoute === route
+    })
+
+    if (!existingFinder) {
+      openFinderWindow(route)
+      return
+    }
+
+    if (existingFinder.minimized) {
+      const dockRect = getDockRect(dockItemId ?? 'finder')
+      setWindows((current) =>
+        current.map((item) =>
+          item.id === existingFinder.id
+            ? {
+                ...item,
+                minimized: false,
+                zIndex: topZIndex + 1,
+                genie: dockRect ? { mode: 'opening', dockRect } : null,
+              }
+            : item,
+        ),
+      )
+    } else {
+      focusWindow(existingFinder.id)
+    }
+
+    navigateFinder(existingFinder.id, route)
   }
 
   async function activateCustomDockItem(item: CustomDockItem) {
@@ -2181,25 +2523,185 @@ function App() {
       return
     }
 
+    if (item.kind === 'finder-route') {
+      openOrFocusFinderRoute(item.target as FinderRoute, item.id)
+      return
+    }
+
     await launchSystemApp(item.target)
   }
 
   async function launchSystemApp(target: string) {
     setLauncherOpen(false)
     if (window.electronDesktop) {
-      await window.electronDesktop.launchApp(target)
+      const result = await window.electronDesktop.launchApp(target) as { ok?: boolean; error?: string | null }
+      if (result?.ok === false) {
+        setSystemError(result.error || `No se pudo abrir: ${target}`)
+      } else {
+        setSystemError(null)
+      }
       return
     }
 
-    await fetch('/api/apps/launch', {
+    const response = await fetch('/api/apps/launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ target }),
     })
+    if (!response.ok) {
+      setSystemError(`No se pudo abrir: ${target}`)
+      return
+    }
+    setSystemError(null)
   }
 
   async function openSystemPath(target: string) {
     await launchSystemApp(target)
+  }
+
+  function setMediaWindowPath(windowId: string, nextPath: string, nextTitle?: string) {
+    setWindows((current) =>
+      current.map((item) =>
+        item.id === windowId
+          ? {
+              ...item,
+              mediaPath: nextPath,
+              title: nextTitle || pathToLabel(nextPath),
+              width: item.appId === 'photos' ? 880 : item.appId === 'videos' ? 960 : item.width,
+              height: item.appId === 'photos' ? 620 : item.appId === 'videos' ? 640 : item.height,
+              minimized: false,
+              zIndex: topZIndex + 1,
+              genie: null,
+            }
+          : item,
+      ),
+    )
+  }
+
+  function getPhotoViewState(windowId: string) {
+    return photoViewStates[windowId] ?? { zoom: 1, rotation: 0 }
+  }
+
+  function updatePhotoViewState(windowId: string, updater: (state: PhotoViewState) => PhotoViewState) {
+    setPhotoViewStates((current) => ({
+      ...current,
+      [windowId]: updater(current[windowId] ?? { zoom: 1, rotation: 0 }),
+    }))
+  }
+
+  function resetPhotoView(windowId: string) {
+    setPhotoViewStates((current) => ({
+      ...current,
+      [windowId]: { zoom: 1, rotation: 0 },
+    }))
+  }
+
+  function updateVideoPlaybackMeta(windowId: string) {
+    const video = videoElementRefs.current[windowId]
+    if (!video) {
+      return
+    }
+
+    setVideoPlaybackState((current) => ({
+      ...current,
+      [windowId]: {
+        playing: !video.paused,
+        muted: video.muted,
+        rate: video.playbackRate,
+      },
+    }))
+  }
+
+  function registerVideoElement(windowId: string, node: HTMLVideoElement | null) {
+    if (node) {
+      videoElementRefs.current[windowId] = node
+      return
+    }
+
+    delete videoElementRefs.current[windowId]
+  }
+
+  async function withVideoElement(windowId: string, action: (video: HTMLVideoElement) => void | Promise<void>) {
+    const video = videoElementRefs.current[windowId]
+    if (!video) {
+      return
+    }
+
+    await action(video)
+    updateVideoPlaybackMeta(windowId)
+  }
+
+  function pathToLabel(targetPath: string) {
+    return targetPath.split(/[\\/]/).filter(Boolean).pop() || targetPath
+  }
+
+  function createFinderRouteForFilePath(targetPath: string): FinderRoute {
+    if (!deviceInfo?.volumes?.length) {
+      return 'computer'
+    }
+
+    const normalizedTarget = targetPath.replace(/\//g, '\\').toLowerCase()
+    const matchedVolume = [...deviceInfo.volumes]
+      .sort((left, right) => right.mount.length - left.mount.length)
+      .find((volume) => normalizedTarget.startsWith(volume.mount.replace(/\//g, '\\').toLowerCase()))
+
+    if (!matchedVolume) {
+      return 'computer'
+    }
+
+    const directoryPath = targetPath.replace(/[\\/][^\\/]+$/, '')
+    return createVolumeSubRoute(matchedVolume.mount, directoryPath || matchedVolume.mount)
+  }
+
+  async function pickMediaFile(windowId: string, kind: 'photo' | 'video') {
+    if (!window.electronDesktop) {
+      const input = document.createElement('input')
+      input.type = 'file'
+      input.accept = kind === 'video'
+        ? '.mp4,.mov,.mkv,.avi,.webm,.m4v,video/*'
+        : '.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,.avif,image/*'
+
+      const selected = await new Promise<File | null>((resolve) => {
+        input.addEventListener('change', () => resolve(input.files?.[0] ?? null), { once: true })
+        input.click()
+      })
+
+      if (!selected) {
+        return
+      }
+
+      setSystemError(null)
+      if (kind === 'photo') {
+        resetPhotoView(windowId)
+      }
+      setMediaWindowPath(windowId, URL.createObjectURL(selected), selected.name)
+      return
+    }
+
+    const selected = await window.electronDesktop.pickMediaFile(kind)
+    if (!selected) {
+      return
+    }
+
+    setSystemError(null)
+    if (kind === 'photo') {
+      resetPhotoView(windowId)
+    }
+    setMediaWindowPath(windowId, selected.path, selected.name)
+  }
+
+  async function revealSystemPath(target: string) {
+    if (!window.electronDesktop) {
+      return
+    }
+
+    const result = await window.electronDesktop.revealPath(target)
+    if (result?.ok === false) {
+      setSystemError(result.error || `No se pudo mostrar la ruta: ${target}`)
+      return
+    }
+
+    setSystemError(null)
   }
 
   async function flushSystemControls(immediatePatch?: SystemControlPatch) {
@@ -2548,7 +3050,7 @@ function App() {
         onClick={() => navigateFinder(windowId, route)}
         onContextMenu={(event) => {
           event.preventDefault()
-          setContextMenu({ x: event.clientX, y: event.clientY, windowId, route, label: getFinderLabel(route) })
+          setContextMenu({ type: 'finder', x: event.clientX, y: event.clientY, windowId, route, label: getFinderLabel(route) })
         }}
       >
         <strong>{getFinderLabel(route)}</strong>
@@ -2722,10 +3224,11 @@ function App() {
                       key={app.id}
                       type="button"
                       className="app-row"
-                      onClick={() => void launchSystemApp(app.target)}
+                      onClick={() => void launchSystemApp(app.launchTarget || app.target)}
                       onContextMenu={(event) => {
                         event.preventDefault()
                         setContextMenu({
+                          type: 'finder',
                           x: event.clientX,
                           y: event.clientY,
                           windowId: windowItem.id,
@@ -2927,7 +3430,7 @@ function App() {
               key={app.id}
               type="button"
               className="app-row launch-card"
-              onClick={() => void launchSystemApp(app.target)}
+              onClick={() => void launchSystemApp(app.launchTarget || app.target)}
               draggable
               onDragStart={(event) => {
                 event.dataTransfer.setData('application/json', JSON.stringify(app))
@@ -3008,7 +3511,7 @@ function App() {
                           key={app.id}
                           type="button"
                           className="launchpad-app"
-                          onClick={() => void launchSystemApp(app.target)}
+                          onClick={() => void launchSystemApp(app.launchTarget || app.target)}
                           draggable
                           onDragStart={(event) => {
                             event.dataTransfer.setData('application/json', JSON.stringify(app))
@@ -3452,12 +3955,18 @@ function App() {
 
   function renderPhotoContent(windowItem: WindowState) {
     const mediaPath = windowItem.mediaPath
+    const photoView = getPhotoViewState(windowItem.id)
     if (!mediaPath) {
       return (
         <div className="media-view photo-view">
           <div className="media-empty-state">
             <strong>Fotos</strong>
             <p>Abre una imagen desde Finder para verla aqui.</p>
+            <div className="media-actions">
+              <button type="button" onClick={() => void pickMediaFile(windowItem.id, 'photo')}>
+                Abrir imagen
+              </button>
+            </div>
           </div>
         </div>
       )
@@ -3465,19 +3974,44 @@ function App() {
 
     return (
       <div className="media-view photo-view">
-        <PhotoViewer src={getMediaSource(mediaPath)} alt={windowItem.title} />
+        <div className="media-toolbar">
+          <div className="media-actions">
+            <button type="button" onClick={() => void pickMediaFile(windowItem.id, 'photo')}>
+              Abrir imagen
+            </button>
+            <button type="button" onClick={() => void revealSystemPath(mediaPath)}>
+              Mostrar en carpeta
+            </button>
+            <button type="button" onClick={() => void openSystemPath(mediaPath)}>
+              Abrir con el sistema
+            </button>
+          </div>
+          <span className="media-path">{`${Math.round(photoView.zoom * 100)}% · ${photoView.rotation}° · ${mediaPath}`}</span>
+        </div>
+        <PhotoViewer
+          src={getMediaSource(mediaPath)}
+          alt={windowItem.title}
+          zoom={photoView.zoom}
+          rotation={photoView.rotation}
+        />
       </div>
     )
   }
 
   function renderVideoContent(windowItem: WindowState) {
     const mediaPath = windowItem.mediaPath
+    const playback = videoPlaybackState[windowItem.id] ?? { playing: false, muted: false, rate: 1 }
     if (!mediaPath) {
       return (
         <div className="media-view video-view">
           <div className="media-empty-state">
             <strong>Videos</strong>
             <p>Abre un video desde Finder para reproducirlo aqui.</p>
+            <div className="media-actions">
+              <button type="button" onClick={() => void pickMediaFile(windowItem.id, 'video')}>
+                Abrir video
+              </button>
+            </div>
           </div>
         </div>
       )
@@ -3485,7 +4019,25 @@ function App() {
 
     return (
       <div className="media-view video-view">
-        <VideoPlayer src={getMediaSource(mediaPath)} />
+        <div className="media-toolbar">
+          <div className="media-actions">
+            <button type="button" onClick={() => void pickMediaFile(windowItem.id, 'video')}>
+              Abrir video
+            </button>
+            <button type="button" onClick={() => void revealSystemPath(mediaPath)}>
+              Mostrar en carpeta
+            </button>
+            <button type="button" onClick={() => void openSystemPath(mediaPath)}>
+              Abrir con el sistema
+            </button>
+          </div>
+          <span className="media-path">{`${playback.playing ? 'Reproduciendo' : 'Pausado'} · ${playback.muted ? 'Mute' : 'Audio'} · x${playback.rate} · ${mediaPath}`}</span>
+        </div>
+        <VideoPlayer
+          src={getMediaSource(mediaPath)}
+          videoRef={(node) => registerVideoElement(windowItem.id, node)}
+          onPlaybackStateChange={() => updateVideoPlaybackMeta(windowItem.id)}
+        />
       </div>
     )
   }
@@ -3576,14 +4128,45 @@ function App() {
       style={{ '--desktop-background': wallpaperPreset.background } as CSSProperties}
     >
       <header className="menu-bar">
-        <div className="menu-left">
+        <div className="menu-left" ref={menuBarRef}>
           <button type="button" className="apple-mark apple-button" onClick={() => openApp('about')}>
             M
           </button>
           <strong>{activeApp.name}</strong>
-          {activeApp.menu.map((item) => (
-            <span key={item}>{item}</span>
-          ))}
+          {activeApp.menu.map((item) => {
+            const actions = getAppMenuActions(activeWindow, item)
+            if (actions.length === 0) {
+              return <span key={item}>{item}</span>
+            }
+
+            return (
+              <div key={item} className="menu-entry-wrap">
+                <button
+                  type="button"
+                  className={`menu-entry-button${openAppMenu === item ? ' open' : ''}`}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    setOpenAppMenu((current) => current === item ? null : item)
+                  }}
+                >
+                  {item}
+                </button>
+                {openAppMenu === item ? (
+                  <div className="app-menu-dropdown">
+                    {actions.map((action) => (
+                      <button
+                        key={action.id}
+                        type="button"
+                        onClick={() => void runAppMenuAction(action.id)}
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
         <div className="menu-right">
           <button
@@ -3724,7 +4307,7 @@ function App() {
           })}
       </section>
 
-      {contextMenu ? (
+      {contextMenu?.type === 'finder' ? (
         <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
           <button type="button" onClick={() => navigateFinder(contextMenu.windowId, contextMenu.route)}>
             Abrir {contextMenu.label}
@@ -3734,6 +4317,72 @@ function App() {
           </button>
           <button type="button" onClick={() => openFinderWindow(contextMenu.route)}>
             Abrir en otra ventana
+          </button>
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'dock-app' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button type="button" onClick={() => openApp(contextMenu.appId)}>
+            Abrir {contextMenu.label}
+          </button>
+          {dockItems.includes(contextMenu.appId) ? (
+            <button
+              type="button"
+              onClick={() => {
+                unpinBuiltInAppFromDock(contextMenu.appId)
+                setContextMenu(null)
+              }}
+            >
+              Quitar del dock
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                pinBuiltInAppToDock(contextMenu.appId)
+                setContextMenu(null)
+              }}
+            >
+              Mantener en dock
+            </button>
+          )}
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'dock-custom' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button
+            type="button"
+            onClick={() => {
+              removeCustomDockItem(contextMenu.itemId)
+              setContextMenu(null)
+            }}
+          >
+            Quitar {contextMenu.label} del dock
+          </button>
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'dock-volume' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button
+            type="button"
+            onClick={() => {
+              openDesktopVolume(contextMenu.mount)
+              setContextMenu(null)
+            }}
+          >
+            Abrir {contextMenu.label}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              pinVolumeToDock(contextMenu.mount)
+              setContextMenu(null)
+            }}
+          >
+            Mantener en dock
           </button>
         </div>
       ) : null}
@@ -3779,9 +4428,9 @@ function App() {
             }
           }}
         >
-          {dockItems.map((appId) => {
+          {visibleDockAppIds.map((appId) => {
             const app = getResolvedApp(appId)
-            const isOpen = windows.some((item) => item.appId === app.id && !item.minimized)
+            const isOpen = windows.some((item) => item.appId === app.id)
             return (
               <DockIconButton
                 key={app.id}
@@ -3794,6 +4443,14 @@ function App() {
                 centerX={dockCenters[app.id] ?? -9999}
                 onActivate={() => openApp(app.id)}
                 registerRef={registerDockItemRef}
+                onContextMenu={(event) => {
+                  event.preventDefault()
+                  openContextMenuAt({
+                    type: 'dock-app',
+                    appId: app.id,
+                    label: app.name,
+                  }, event.clientX, event.clientY)
+                }}
               />
             )
           })}
@@ -3811,12 +4468,48 @@ function App() {
                 void activateCustomDockItem(item)
               }}
               registerRef={registerDockItemRef}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                openContextMenuAt({
+                  type: 'dock-custom',
+                  itemId: item.id,
+                  label: item.name,
+                }, event.clientX, event.clientY)
+              }}
               draggable
               onDragStart={(event) => {
                 event.dataTransfer.setData('text/plain', item.id)
                 event.dataTransfer.effectAllowed = 'move'
               }}
               onDragEnd={(event) => handleDockIconDragEnd(event, item.id, true)}
+            />
+          ))}
+          {visibleVolumeDockItems.map((item) => (
+            <DockIconButton
+              key={item.id}
+              id={item.id}
+              name={item.name}
+              accent={item.accent}
+              icon={item.icon}
+              isOpen
+              mouseX={dockMouseX}
+              centerX={dockCenters[item.id] ?? -9999}
+              onActivate={() => {
+                void activateCustomDockItem(item)
+              }}
+              registerRef={registerDockItemRef}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                const mount = getVolumeMountFromRoute(item.target as FinderRoute)
+                if (!mount) {
+                  return
+                }
+                openContextMenuAt({
+                  type: 'dock-volume',
+                  mount,
+                  label: item.name,
+                }, event.clientX, event.clientY)
+              }}
             />
           ))}
         </motion.div>

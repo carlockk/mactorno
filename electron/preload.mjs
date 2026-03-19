@@ -6,6 +6,8 @@ contextBridge.exposeInMainWorld('electronDesktop', {
   listVolumeEntries: (target) => ipcRenderer.invoke('volumes:list-entries', target),
   getSystemControls: () => ipcRenderer.invoke('system-controls:get'),
   setSystemControls: (payload) => ipcRenderer.invoke('system-controls:set', payload),
+  pickMediaFile: (kind) => ipcRenderer.invoke('media:pick-file', kind),
+  revealPath: (target) => ipcRenderer.invoke('path:reveal', target),
   executeTerminalCommand: (payload) => ipcRenderer.invoke('terminal:execute', payload),
   launchApp: (target) => ipcRenderer.invoke('apps:launch', target),
   onBrowserSyncRequest: (callback) => {

@@ -4,6 +4,12 @@ body,
   cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='18' height='22' viewBox='0 0 18 22'%3E%3Cpath d='M2 1.5 2.2 18.4 6.2 14.4 8.9 20.5 11.6 19.2 8.8 13.1 14.2 13Z' fill='%23000000' stroke='%23ffffff' stroke-width='1.15' stroke-linejoin='round'/%3E%3C/svg%3E") 2 1, default;
 }
 
+*,
+*::before,
+*::after {
+  cursor: inherit !important;
+}
+
 .login-screen,
 .desktop-shell {
   min-height: 100svh;
@@ -132,7 +138,6 @@ label {
   color: #eff7ff;
   background: rgba(248, 252, 255, 0.18);
   backdrop-filter: blur(22px);
-  contain: layout paint;
   border-bottom: 1px solid rgba(255, 255, 255, 0.18);
   z-index: 1000;
 }
@@ -143,6 +148,55 @@ label {
   align-items: center;
   gap: 14px;
   font-size: 13px;
+}
+
+.menu-entry-wrap {
+  position: relative;
+}
+
+.menu-entry-button {
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+}
+
+.menu-entry-button.open,
+.menu-entry-button:hover {
+  background: transparent;
+}
+
+.app-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  display: grid;
+  gap: 4px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(14, 18, 26, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
+  z-index: 1400;
+}
+
+.app-menu-dropdown button {
+  border: 0;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  color: #eef6ff;
+  background: transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.app-menu-dropdown button:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .apple-mark {
@@ -238,6 +292,11 @@ label {
 .desktop-shell.appearance-dark .menu-bar {
   background: rgba(17, 22, 34, 0.42);
   border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.desktop-shell.appearance-dark .menu-entry-button.open,
+.desktop-shell.appearance-dark .menu-entry-button:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .desktop-shell.appearance-dark .control-center,
@@ -1675,11 +1734,63 @@ label {
   box-sizing: border-box;
   padding: 12px;
   background: #0f1116;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.media-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.media-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.media-actions button {
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+  color: #edf3ff;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+}
+
+.media-path {
+  flex: 1;
+  min-width: 220px;
+  text-align: right;
+  color: rgba(237, 243, 255, 0.72);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.media-empty-state {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 12px;
+  text-align: center;
+  color: #edf3ff;
 }
 
 .media-stage {
   width: 100%;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   display: grid;
   place-items: center;
   overflow: hidden;
@@ -1716,6 +1827,11 @@ label {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
+}
+
+.media-image {
+  transition: transform 180ms ease;
+  transform-origin: center center;
 }
 
 .media-video {
@@ -2100,7 +2216,6 @@ label {
   border-radius: 12px;
   background: rgba(14, 18, 26, 0.88);
   backdrop-filter: blur(18px);
-  contain: layout paint;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
 }
 

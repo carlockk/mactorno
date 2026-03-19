@@ -1,6 +1,7 @@
 import path from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
-import { app, BrowserWindow, ipcMain, net, protocol, shell } from 'electron'
+import { promises as fs } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
 import { executeTerminalCommand, getDeviceInfo, getInstalledApps, getSystemControls, launchApp, listVolumeEntries, setSystemControls } from './system-info.mjs'
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
@@ -23,6 +24,41 @@ let browserState = {
   title: '',
   loading: false,
   lastError: null,
+}
+
+function getMediaMimeType(targetPath) {
+  const extension = path.extname(targetPath).toLowerCase()
+  switch (extension) {
+    case '.png':
+      return 'image/png'
+    case '.jpg':
+    case '.jpeg':
+      return 'image/jpeg'
+    case '.gif':
+      return 'image/gif'
+    case '.webp':
+      return 'image/webp'
+    case '.bmp':
+      return 'image/bmp'
+    case '.svg':
+      return 'image/svg+xml'
+    case '.avif':
+      return 'image/avif'
+    case '.mp4':
+      return 'video/mp4'
+    case '.webm':
+      return 'video/webm'
+    case '.mov':
+      return 'video/quicktime'
+    case '.mkv':
+      return 'video/x-matroska'
+    case '.avi':
+      return 'video/x-msvideo'
+    case '.m4v':
+      return 'video/x-m4v'
+    default:
+      return 'application/octet-stream'
+  }
 }
 
 function normalizeHostname(url) {
@@ -322,10 +358,61 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  protocol.handle('mactorno-media', (request) => {
+  protocol.handle('mactorno-media', async (request) => {
     const encodedPath = request.url.slice('mactorno-media://'.length)
     const targetPath = decodeURIComponent(encodedPath)
-    return net.fetch(pathToFileURL(targetPath).toString())
+
+    try {
+      const stat = await fs.stat(targetPath)
+      if (!stat.isFile()) {
+        return new Response('Not found', { status: 404 })
+      }
+
+      const mimeType = getMediaMimeType(targetPath)
+      const rangeHeader = request.headers.get('range')
+
+      if (rangeHeader) {
+        const match = rangeHeader.match(/bytes=(\d*)-(\d*)/)
+        if (match) {
+          const start = Number(match[1] || 0)
+          const end = Number(match[2] || stat.size - 1)
+          const safeStart = Math.max(0, Math.min(start, stat.size - 1))
+          const safeEnd = Math.max(safeStart, Math.min(end, stat.size - 1))
+          const length = safeEnd - safeStart + 1
+          const fileHandle = await fs.open(targetPath, 'r')
+          const buffer = Buffer.alloc(length)
+
+          try {
+            await fileHandle.read(buffer, 0, length, safeStart)
+          } finally {
+            await fileHandle.close()
+          }
+
+          return new Response(buffer, {
+            status: 206,
+            headers: {
+              'Content-Type': mimeType,
+              'Content-Length': String(length),
+              'Content-Range': `bytes ${safeStart}-${safeEnd}/${stat.size}`,
+              'Accept-Ranges': 'bytes',
+              'Cache-Control': 'no-cache',
+            },
+          })
+        }
+      }
+
+      const data = await fs.readFile(targetPath)
+      return new Response(data, {
+        headers: {
+          'Content-Type': mimeType,
+          'Content-Length': String(data.byteLength),
+          'Accept-Ranges': 'bytes',
+          'Cache-Control': 'no-cache',
+        },
+      })
+    } catch {
+      return new Response('Not found', { status: 404 })
+    }
   })
 
   createWindow()
@@ -337,8 +424,33 @@ app.whenReady().then(() => {
   ipcMain.handle('system-controls:set', async (_event, payload) => setSystemControls(payload))
   ipcMain.handle('terminal:execute', async (_event, payload) => executeTerminalCommand(payload.command, payload.cwd))
   ipcMain.handle('apps:launch', async (_event, target) => {
-    await launchApp(target)
-    return { ok: true }
+    return launchApp(target)
+  })
+  ipcMain.handle('media:pick-file', async (_event, kind) => {
+    const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
+      properties: ['openFile'],
+      filters:
+        kind === 'video'
+          ? [{ name: 'Videos', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'] }]
+          : [{ name: 'Imagenes', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'] }],
+    })
+
+    if (result.canceled || !result.filePaths[0]) {
+      return null
+    }
+
+    return {
+      path: result.filePaths[0],
+      name: path.basename(result.filePaths[0]),
+    }
+  })
+  ipcMain.handle('path:reveal', async (_event, target) => {
+    if (!target) {
+      return { ok: false, error: 'Ruta vacia.' }
+    }
+
+    shell.showItemInFolder(target)
+    return { ok: true, error: null }
   })
 
   ipcMain.on('browser:sync-host', (_event, payload) => {

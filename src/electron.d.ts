@@ -15,8 +15,10 @@ type ElectronDesktopApi = {
   listVolumeEntries: (target: string) => Promise<unknown>
   getSystemControls: () => Promise<unknown>
   setSystemControls: (payload: { brightness?: number; volume?: number }) => Promise<unknown>
+  pickMediaFile: (kind: 'photo' | 'video') => Promise<{ path: string; name: string } | null>
+  revealPath: (target: string) => Promise<{ ok?: boolean; error?: string | null }>
   executeTerminalCommand: (payload: { command: string; cwd: string }) => Promise<unknown>
-  launchApp: (target: string) => Promise<unknown>
+  launchApp: (target: string) => Promise<{ ok?: boolean; error?: string | null }>
   onBrowserSyncRequest: (callback: () => void) => () => void
   onBrowserState: (
     callback: (payload: {
