@@ -9,8 +9,8 @@ import {
 } from 'motion/react'
 import './App.css'
 
-type AppId = 'finder' | 'notes' | 'safari' | 'terminal' | 'launcher' | 'calculator' | 'photos' | 'videos' | 'display' | 'about' | 'docksettings'
-type FinderRoute = 'computer' | 'device' | 'applications' | 'dock' | 'display' | `volume:${string}`
+type AppId = 'finder' | 'notes' | 'textedit' | 'safari' | 'terminal' | 'launcher' | 'calculator' | 'photos' | 'videos' | 'display' | 'about' | 'docksettings'
+type FinderRoute = 'computer' | 'desktop' | 'trash' | 'device' | 'applications' | 'dock' | 'display' | `volume:${string}` | `desktop-folder:${string}`
 type RectState = { x: number; y: number; width: number; height: number }
 
 type DesktopApp = {
@@ -90,6 +90,7 @@ type WindowState = {
   calculatorState: CalculatorState | null
   terminalState: TerminalState | null
   mediaPath: string | null
+  textDocumentId: string | null
 }
 
 type DragState = { id: string; offsetX: number; offsetY: number }
@@ -156,6 +157,26 @@ type AppVisualOverrides = Partial<
 >
 
 type ContextMenuState =
+  | {
+      type: 'desktop'
+      x: number
+      y: number
+      desktopX: number
+      desktopY: number
+    }
+  | {
+      type: 'desktop-item'
+      x: number
+      y: number
+      itemId: string
+      label: string
+      kind: DesktopItem['kind']
+    }
+  | {
+      type: 'trash'
+      x: number
+      y: number
+    }
   | {
       type: 'finder'
       x: number
@@ -226,6 +247,25 @@ type NoteItem = {
   updatedAt: number
 }
 
+type DesktopItem = {
+  id: string
+  kind: 'folder' | 'text'
+  name: string
+  parentId: string | null
+  content: string
+  x: number
+  y: number
+  updatedAt: number
+  trashedAt: number | null
+}
+
+type DesktopItemDragState = {
+  id: string
+  offsetX: number
+  offsetY: number
+  moved: boolean
+}
+
 const MENU_BAR_HEIGHT = 30
 const DOCK_BOTTOM = 0
 const DOCK_HEIGHT = 82
@@ -242,6 +282,7 @@ const DESKTOP_VOLUME_POSITIONS_STORAGE_KEY = 'mactorno-desktop-volume-positions'
 const APPEARANCE_MODE_STORAGE_KEY = 'mactorno-appearance-mode'
 const WALLPAPER_STORAGE_KEY = 'mactorno-wallpaper-id'
 const NOTES_STORAGE_KEY = 'mactorno-notes'
+const DESKTOP_ITEMS_STORAGE_KEY = 'mactorno-desktop-items'
 const SYSTEM_CONTROLS_DEBOUNCE_MS = 120
 const DEFAULT_DOCK_ITEMS: AppId[] = ['finder', 'launcher', 'notes', 'safari', 'photos', 'videos', 'calculator', 'docksettings', 'terminal']
 const SAFARI_HOME_URL = 'mactorno://home'
@@ -301,6 +342,7 @@ const APPS: DesktopApp[] = [
   { id: 'finder', name: 'Finder', accent: 'linear-gradient(135deg, #7fd1ff 0%, #2f84ff 100%)', icon: 'F', menu: ['Archivo', 'Edicion', 'Ver', 'Ir', 'Ventana', 'Ayuda'], dockable: true },
   { id: 'launcher', name: 'Apps', accent: 'linear-gradient(135deg, #ffd59f 0%, #ff8b4d 100%)', icon: 'A', menu: ['Archivo', 'Ver', 'Ventana', 'Ayuda'], dockable: true },
   { id: 'notes', name: 'Notas', accent: 'linear-gradient(135deg, #ffe57a 0%, #ffbf2f 100%)', icon: 'N', menu: ['Archivo', 'Edicion', 'Formato', 'Organizar', 'Ventana', 'Ayuda'], dockable: true },
+  { id: 'textedit', name: 'Documento', accent: 'linear-gradient(135deg, #f7faff 0%, #d6deeb 100%)', icon: 'T', menu: ['Archivo', 'Edicion', 'Formato', 'Ventana', 'Ayuda'], dockable: false },
   { id: 'safari', name: 'Safari', accent: 'linear-gradient(135deg, #a8fff7 0%, #21b8ff 100%)', icon: 'S', menu: ['Archivo', 'Edicion', 'Visualizacion', 'Historial', 'Marcadores'], dockable: true },
   { id: 'calculator', name: 'Calculadora', accent: 'linear-gradient(135deg, #ffcc74 0%, #ff8e3b 100%)', icon: 'C', menu: ['Archivo', 'Edicion', 'Ver', 'Ventana', 'Ayuda'], dockable: true },
   { id: 'photos', name: 'Fotos', accent: 'linear-gradient(135deg, #ff9bc2 0%, #ff6c81 100%)', icon: 'P', menu: ['Archivo', 'Edicion', 'Imagen', 'Ventana', 'Ayuda'], dockable: true },
@@ -333,6 +375,18 @@ function createLampClipPath(anchorX: number, topInset: number, waistInset: numbe
 
 function createVolumeRoute(mount: string): FinderRoute {
   return `volume:${encodeURIComponent(mount)}::${encodeURIComponent(mount)}` as FinderRoute
+}
+
+function createDesktopFolderRoute(itemId: string): FinderRoute {
+  return `desktop-folder:${itemId}` as FinderRoute
+}
+
+function isDesktopFolderRoute(route: FinderRoute): route is `desktop-folder:${string}` {
+  return route.startsWith('desktop-folder:')
+}
+
+function getDesktopFolderIdFromRoute(route: FinderRoute) {
+  return isDesktopFolderRoute(route) ? route.slice('desktop-folder:'.length) : null
 }
 
 function isVolumeRoute(route: FinderRoute): route is `volume:${string}` {
@@ -478,6 +532,10 @@ function getFinderLabel(route: FinderRoute) {
   switch (route) {
     case 'computer':
       return 'Equipo'
+    case 'desktop':
+      return 'Escritorio'
+    case 'trash':
+      return 'Papelera'
     case 'device':
       return 'Informacion del dispositivo'
     case 'applications':
@@ -486,6 +544,25 @@ function getFinderLabel(route: FinderRoute) {
       return 'Dock'
     case 'display':
       return 'Pantalla'
+  }
+}
+
+function loadDesktopItems() {
+  if (typeof window === 'undefined') {
+    return [] as DesktopItem[]
+  }
+
+  try {
+    const raw = window.localStorage.getItem(DESKTOP_ITEMS_STORAGE_KEY)
+    const parsed = raw ? JSON.parse(raw) as DesktopItem[] : []
+    return Array.isArray(parsed)
+      ? parsed.map((item) => ({
+          ...item,
+          trashedAt: typeof item.trashedAt === 'number' ? item.trashedAt : null,
+        }))
+      : []
+  } catch {
+    return []
   }
 }
 
@@ -1040,6 +1117,9 @@ function App() {
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => loadAppearanceMode())
   const [wallpaperId, setWallpaperId] = useState(() => loadWallpaperId())
   const [notes, setNotes] = useState<NoteItem[]>(() => loadNotes())
+  const [desktopItems, setDesktopItems] = useState<DesktopItem[]>(() => loadDesktopItems())
+  const [editingDesktopItemId, setEditingDesktopItemId] = useState<string | null>(null)
+  const [editingDesktopItemName, setEditingDesktopItemName] = useState('')
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const [launcherSearch, setLauncherSearch] = useState('')
@@ -1070,6 +1150,8 @@ function App() {
   const runningGenies = useRef(new Set<string>())
   const desktopVolumeDragRef = useRef<DesktopVolumeDragState | null>(null)
   const skipDesktopVolumeClickRef = useRef<string | null>(null)
+  const desktopItemDragRef = useRef<DesktopItemDragState | null>(null)
+  const skipDesktopItemClickRef = useRef<string | null>(null)
   const pendingSystemControlsPatchRef = useRef<SystemControlPatch>({})
   const systemControlsFlushTimerRef = useRef<number | null>(null)
   const pendingDockMouseX = useRef<number | null>(null)
@@ -1080,6 +1162,15 @@ function App() {
   const [videoPlaybackState, setVideoPlaybackState] = useState<Record<string, { playing: boolean; muted: boolean; rate: number }>>({})
   const wallpaperPreset = WALLPAPER_PRESETS.find((preset) => preset.id === wallpaperId) ?? WALLPAPER_PRESETS[0]
   const activeNote = notes.find((note) => note.id === selectedNoteId) ?? notes[0] ?? null
+  const rootDesktopItems = useMemo(
+    () => desktopItems.filter((item) => item.parentId === null && item.trashedAt === null),
+    [desktopItems],
+  )
+  const trashItems = useMemo(() => {
+    const trashed = desktopItems.filter((item) => item.trashedAt !== null)
+    const trashedIds = new Set(trashed.map((item) => item.id))
+    return trashed.filter((item) => !item.parentId || !trashedIds.has(item.parentId))
+  }, [desktopItems])
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const visibleDockAppIds = useMemo(() => {
     const runningDockableApps = windows
@@ -1131,6 +1222,41 @@ function App() {
         (MENU_BAR_HEIGHT + DESKTOP_TOP_GAP) -
         (DOCK_HEIGHT + DOCK_BOTTOM + DESKTOP_BOTTOM_GAP),
     }
+  }
+
+  function getNextDesktopItemPosition(itemCount: number) {
+    const desktop = getDesktopBounds()
+    const columnWidth = 104
+    const itemHeight = 102
+    const leftInset = 18
+    const topInset = 18
+    const itemsPerColumn = Math.max(1, Math.floor((desktop.height - topInset) / itemHeight))
+    const column = Math.floor(itemCount / itemsPerColumn)
+    const row = itemCount % itemsPerColumn
+    const maxX = desktop.x + desktop.width - 88
+    const maxY = desktop.y + desktop.height - 92
+
+    return {
+      x: clamp(desktop.x + leftInset + column * columnWidth, desktop.x, maxX),
+      y: clamp(desktop.y + topInset + row * itemHeight, desktop.y, maxY),
+    }
+  }
+
+  function getFinderRouteLabel(route: FinderRoute) {
+    if (route === 'desktop') {
+      return 'Escritorio'
+    }
+
+    if (route === 'trash') {
+      return 'Papelera'
+    }
+
+    const desktopFolderId = getDesktopFolderIdFromRoute(route)
+    if (desktopFolderId) {
+      return desktopItems.find((item) => item.id === desktopFolderId)?.name ?? 'Carpeta'
+    }
+
+    return getFinderLabel(route) ?? 'Finder'
   }
 
   function getDesktopVolumePosition(volume: VolumeInfo, index: number) {
@@ -1386,6 +1512,10 @@ function App() {
   }, [notes, selectedNoteId])
 
   useEffect(() => {
+    window.localStorage.setItem(DESKTOP_ITEMS_STORAGE_KEY, JSON.stringify(desktopItems))
+  }, [desktopItems])
+
+  useEffect(() => {
     if (!loggedIn) {
       return
     }
@@ -1609,6 +1739,45 @@ function App() {
         skipDesktopVolumeClickRef.current = desktopVolumeDragRef.current.mount
       }
       desktopVolumeDragRef.current = null
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      const activeDrag = desktopItemDragRef.current
+      if (!activeDrag) {
+        return
+      }
+
+      const nextX = clamp(event.clientX - activeDrag.offsetX, 12, Math.max(12, window.innerWidth - 108))
+      const nextY = clamp(event.clientY - activeDrag.offsetY, MENU_BAR_HEIGHT + 12, Math.max(MENU_BAR_HEIGHT + 12, window.innerHeight - 132))
+
+      desktopItemDragRef.current = {
+        ...activeDrag,
+        moved: activeDrag.moved || Math.abs(event.movementX) > 0 || Math.abs(event.movementY) > 0,
+      }
+
+      setDesktopItems((current) =>
+        current.map((item) =>
+          item.id === activeDrag.id
+            ? { ...item, x: nextX, y: nextY }
+            : item,
+        ),
+      )
+    }
+
+    function handlePointerUp() {
+      if (desktopItemDragRef.current?.moved) {
+        skipDesktopItemClickRef.current = desktopItemDragRef.current.id
+      }
+      desktopItemDragRef.current = null
     }
 
     window.addEventListener('pointermove', handlePointerMove)
@@ -2052,8 +2221,8 @@ function App() {
       title: getApp(appId).name,
       x: 140 + windows.length * 24,
       y: 100 + windows.length * 20,
-      width: appId === 'finder' ? 780 : appId === 'launcher' ? 700 : appId === 'about' ? 520 : appId === 'calculator' ? 292 : appId === 'display' ? 620 : 460,
-      height: appId === 'finder' ? 500 : appId === 'launcher' ? 460 : appId === 'about' ? 420 : appId === 'calculator' ? 430 : appId === 'display' ? 520 : 340,
+      width: appId === 'finder' ? 780 : appId === 'launcher' ? 700 : appId === 'about' ? 520 : appId === 'calculator' ? 292 : appId === 'display' ? 620 : appId === 'textedit' ? 620 : 460,
+      height: appId === 'finder' ? 500 : appId === 'launcher' ? 460 : appId === 'about' ? 420 : appId === 'calculator' ? 430 : appId === 'display' ? 520 : appId === 'textedit' ? 460 : 340,
       zIndex: topZIndex + 1,
       minimized: false,
       maximized: false,
@@ -2064,6 +2233,7 @@ function App() {
       calculatorState: appId === 'calculator' ? createCalculatorState() : null,
       terminalState: appId === 'terminal' ? createTerminalState(deviceInfo?.homeDir ?? 'C:\\') : null,
       mediaPath: null,
+      textDocumentId: null,
     }
   }
 
@@ -2150,6 +2320,308 @@ function App() {
     }
 
     openOrFocusFinderRoute(createVolumeRoute(mount))
+  }
+
+  function createDesktopItem(kind: DesktopItem['kind'], position?: { x: number; y: number }, parentId: string | null = null) {
+    const nextName = getNextDesktopItemName(kind, parentId)
+
+    const fallbackPosition = getNextDesktopItemPosition(rootDesktopItems.length)
+    const desktop = getDesktopBounds()
+    const nextPosition = position
+      ? {
+          x: clamp(position.x, desktop.x, desktop.x + desktop.width - 88),
+          y: clamp(position.y, desktop.y, desktop.y + desktop.height - 92),
+        }
+      : fallbackPosition
+
+    const nextItem: DesktopItem = {
+      id: `desktop-item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind,
+      name: nextName,
+      parentId,
+      content: kind === 'text' ? '' : '',
+      x: nextPosition.x,
+      y: nextPosition.y,
+      updatedAt: Date.now(),
+      trashedAt: null,
+    }
+
+    setDesktopItems((current) => [...current, nextItem])
+    setEditingDesktopItemId(nextItem.id)
+    setEditingDesktopItemName(nextItem.name)
+    setContextMenu(null)
+
+    if (kind === 'text') {
+      window.setTimeout(() => {
+        openDesktopDocument(nextItem.id)
+      }, 0)
+    }
+  }
+
+  function renameDesktopItem(itemId: string) {
+    const target = desktopItems.find((item) => item.id === itemId)
+    if (!target) {
+      setContextMenu(null)
+      return
+    }
+
+    setEditingDesktopItemId(itemId)
+    setEditingDesktopItemName(target.name)
+    setContextMenu(null)
+  }
+
+  function commitDesktopItemRename(itemId: string) {
+    const target = desktopItems.find((item) => item.id === itemId)
+    if (!target) {
+      setEditingDesktopItemId(null)
+      setEditingDesktopItemName('')
+      return
+    }
+
+    const nextName = editingDesktopItemName.trim() || target.name
+
+    setDesktopItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? { ...item, name: nextName, updatedAt: Date.now() }
+          : item,
+      ),
+    )
+
+    setWindows((current) =>
+      current.map((item) =>
+        item.textDocumentId === itemId
+          ? { ...item, title: nextName }
+          : item,
+      ),
+    )
+
+    setEditingDesktopItemId(null)
+    setEditingDesktopItemName('')
+  }
+
+  function cancelDesktopItemRename() {
+    setEditingDesktopItemId(null)
+    setEditingDesktopItemName('')
+  }
+
+  function deleteDesktopItem(itemId: string) {
+    const descendants = new Set<string>([itemId])
+    let changed = true
+
+    while (changed) {
+      changed = false
+      desktopItems.forEach((item) => {
+        if (item.parentId && descendants.has(item.parentId) && !descendants.has(item.id)) {
+          descendants.add(item.id)
+          changed = true
+        }
+      })
+    }
+
+    const trashedAt = Date.now()
+
+    setDesktopItems((current) =>
+      current.map((item) =>
+        descendants.has(item.id)
+          ? { ...item, trashedAt, updatedAt: trashedAt }
+          : item,
+      ),
+    )
+    setWindows((current) =>
+      current
+        .filter((item) => !item.textDocumentId || !descendants.has(item.textDocumentId))
+        .map((item) => {
+          if (item.finderState && isDesktopFolderRoute(getActiveFinderRoute(item.finderState))) {
+            const folderId = getDesktopFolderIdFromRoute(getActiveFinderRoute(item.finderState))
+            if (folderId && descendants.has(folderId)) {
+              return {
+                ...item,
+                finderState: createFinderState('desktop'),
+              }
+            }
+          }
+          return item
+        }),
+    )
+    setContextMenu(null)
+  }
+
+  function restoreDesktopItem(itemId: string) {
+    const descendants = new Set<string>([itemId])
+    let changed = true
+
+    while (changed) {
+      changed = false
+      desktopItems.forEach((item) => {
+        if (item.parentId && descendants.has(item.parentId) && !descendants.has(item.id)) {
+          descendants.add(item.id)
+          changed = true
+        }
+      })
+    }
+
+    setDesktopItems((current) =>
+      current.map((item) =>
+        descendants.has(item.id)
+          ? { ...item, trashedAt: null, updatedAt: Date.now() }
+          : item,
+      ),
+    )
+  }
+
+  function permanentlyDeleteDesktopItem(itemId: string) {
+    const descendants = new Set<string>([itemId])
+    let changed = true
+
+    while (changed) {
+      changed = false
+      desktopItems.forEach((item) => {
+        if (item.parentId && descendants.has(item.parentId) && !descendants.has(item.id)) {
+          descendants.add(item.id)
+          changed = true
+        }
+      })
+    }
+
+    setDesktopItems((current) => current.filter((item) => !descendants.has(item.id)))
+    setWindows((current) => current.filter((item) => !item.textDocumentId || !descendants.has(item.textDocumentId)))
+  }
+
+  function emptyTrash() {
+    const trashedIds = new Set(desktopItems.filter((item) => item.trashedAt !== null).map((item) => item.id))
+    if (trashedIds.size === 0) {
+      setContextMenu(null)
+      return
+    }
+
+    setDesktopItems((current) => current.filter((item) => !trashedIds.has(item.id)))
+    setWindows((current) => current.filter((item) => !item.textDocumentId || !trashedIds.has(item.textDocumentId)))
+    setContextMenu(null)
+  }
+
+  function openDesktopDocument(itemId: string) {
+    if (skipDesktopItemClickRef.current === itemId) {
+      skipDesktopItemClickRef.current = null
+      return
+    }
+
+    const target = desktopItems.find((item) => item.id === itemId && item.kind === 'text')
+    if (!target) {
+      return
+    }
+
+    const existing = windows.find((item) => item.appId === 'textedit' && item.textDocumentId === itemId)
+    if (existing) {
+      if (existing.minimized) {
+        setWindows((current) =>
+          current.map((item) =>
+            item.id === existing.id
+              ? { ...item, minimized: false, zIndex: topZIndex + 1, genie: null, title: target.name }
+              : item,
+          ),
+        )
+      } else {
+        focusWindow(existing.id)
+      }
+      return
+    }
+
+    const nextWindow = createWindow('textedit')
+    nextWindow.textDocumentId = itemId
+    nextWindow.title = target.name
+    setWindows((current) => [...current, nextWindow])
+  }
+
+  function openDesktopFolder(itemId: string) {
+    if (skipDesktopItemClickRef.current === itemId) {
+      skipDesktopItemClickRef.current = null
+      return
+    }
+
+    openOrFocusFinderRoute(createDesktopFolderRoute(itemId))
+  }
+
+  function startDesktopItemDrag(event: React.PointerEvent<HTMLButtonElement>, itemId: string) {
+    if (event.button !== 0) {
+      return
+    }
+
+    if (editingDesktopItemId === itemId) {
+      return
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    desktopItemDragRef.current = {
+      id: itemId,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      moved: false,
+    }
+  }
+
+  function sortDesktopRootItems() {
+    const sortedRootItems = [...rootDesktopItems].sort((left, right) => {
+      if (left.kind !== right.kind) {
+        return left.kind === 'folder' ? -1 : 1
+      }
+      return left.name.localeCompare(right.name, 'es')
+    })
+
+    setDesktopItems((current) => {
+      const rootUpdates = new Map(
+        sortedRootItems.map((item, index) => [item.id, getNextDesktopItemPosition(index)]),
+      )
+
+      return current.map((item) =>
+        item.parentId === null && rootUpdates.has(item.id)
+          ? { ...item, ...rootUpdates.get(item.id)! }
+          : item,
+      )
+    })
+
+    setContextMenu(null)
+  }
+
+  function getNextDesktopItemName(kind: DesktopItem['kind'], parentId: string | null) {
+    const siblings = desktopItems.filter((item) => item.parentId === parentId && item.kind === kind && item.trashedAt === null)
+    const baseName = kind === 'folder' ? 'Nueva carpeta' : 'Nuevo documento de texto'
+    const existingNames = new Set(siblings.map((item) => item.name.trim().toLowerCase()))
+
+    if (!existingNames.has(baseName.toLowerCase())) {
+      return baseName
+    }
+
+    let index = 2
+    while (existingNames.has(`${baseName} ${index}`.toLowerCase())) {
+      index += 1
+    }
+
+    return `${baseName} ${index}`
+  }
+
+  function updateDesktopDocument(itemId: string, patch: Partial<Pick<DesktopItem, 'name' | 'content'>>) {
+    setDesktopItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? {
+              ...item,
+              ...patch,
+              updatedAt: Date.now(),
+            }
+          : item,
+      ),
+    )
+
+    if (patch.name) {
+      setWindows((current) =>
+        current.map((item) =>
+          item.textDocumentId === itemId
+            ? { ...item, title: patch.name! }
+            : item,
+        ),
+      )
+    }
   }
 
   function openSafariWindow(url?: string) {
@@ -3050,10 +3522,10 @@ function App() {
         onClick={() => navigateFinder(windowId, route)}
         onContextMenu={(event) => {
           event.preventDefault()
-          setContextMenu({ type: 'finder', x: event.clientX, y: event.clientY, windowId, route, label: getFinderLabel(route) })
+          setContextMenu({ type: 'finder', x: event.clientX, y: event.clientY, windowId, route, label: getFinderRouteLabel(route) })
         }}
       >
-        <strong>{getFinderLabel(route)}</strong>
+        <strong>{getFinderRouteLabel(route)}</strong>
         <span>{subtitle}</span>
       </button>
     )
@@ -3077,6 +3549,13 @@ function App() {
     const finderState = windowItem.finderState
     const activeTab = getActiveFinderTab(finderState)
     const activeRoute = getActiveFinderRoute(finderState)
+    const activeDesktopFolderId = getDesktopFolderIdFromRoute(activeRoute)
+    const activeDesktopItems =
+      activeRoute === 'desktop' || activeDesktopFolderId
+        ? desktopItems.filter((item) => item.parentId === (activeDesktopFolderId ?? null) && item.trashedAt === null)
+        : []
+    const activeDesktopFolders = activeDesktopItems.filter((item) => item.kind === 'folder')
+    const activeDesktopFiles = activeDesktopItems.filter((item) => item.kind === 'text')
     const activeVolumeMount = getVolumeMountFromRoute(activeRoute)
     const activeVolumePath = getVolumePathFromRoute(activeRoute)
     const activeVolume = activeVolumeMount
@@ -3100,7 +3579,7 @@ function App() {
               Adelante
             </button>
           </div>
-          <strong>{getFinderLabel(activeRoute)}</strong>
+          <strong>{getFinderRouteLabel(activeRoute)}</strong>
           <button type="button" onClick={() => openFinderTab(windowItem.id, activeRoute)}>
             Nueva pestana
           </button>
@@ -3113,12 +3592,12 @@ function App() {
               className={`finder-tab${tab.id === finderState.activeTabId ? ' active' : ''}`}
             >
               <button type="button" className="finder-tab-label" onClick={() => selectFinderTab(windowItem.id, tab.id)}>
-                {getFinderLabel(tab.history[tab.historyIndex])}
+                {getFinderRouteLabel(tab.history[tab.historyIndex])}
               </button>
               <button
                 type="button"
                 className="finder-tab-close"
-                aria-label={`Cerrar pestaña ${getFinderLabel(tab.history[tab.historyIndex])}`}
+                aria-label={`Cerrar pestaña ${getFinderRouteLabel(tab.history[tab.historyIndex])}`}
                 onClick={() => closeFinderTab(windowItem.id, tab.id)}
               >
                 ×
@@ -3129,6 +3608,12 @@ function App() {
 
         <div className="finder-layout">
           <aside className="finder-sidebar">
+            <button type="button" onClick={() => navigateFinder(windowItem.id, 'desktop')}>
+              Escritorio
+            </button>
+            <button type="button" onClick={() => navigateFinder(windowItem.id, 'trash')}>
+              Papelera
+            </button>
             <button type="button" onClick={() => navigateFinder(windowItem.id, 'computer')}>
               Equipo
             </button>
@@ -3166,6 +3651,8 @@ function App() {
                 <h2>Equipo</h2>
                 <p>Entrada principal del dispositivo local.</p>
                 <div className="finder-card-grid">
+                  {renderFinderCard(windowItem.id, 'desktop', 'Carpetas y documentos virtuales del escritorio')}
+                  {renderFinderCard(windowItem.id, 'trash', 'Elementos eliminados del escritorio virtual')}
                   {renderFinderCard(windowItem.id, 'device', 'CPU, RAM, sistema operativo y discos')}
                   {renderFinderCard(windowItem.id, 'applications', 'Apps detectadas segun el sistema operativo')}
                   {renderFinderCard(windowItem.id, 'dock', 'Personaliza los iconos del dock inferior')}
@@ -3179,6 +3666,79 @@ function App() {
                   )}
                 </div>
               </>
+            ) : null}
+
+            {activeRoute === 'desktop' || activeDesktopFolderId ? (
+              <div className="device-panel">
+                <h2>{getFinderRouteLabel(activeRoute)}</h2>
+                <p>{activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : 'Contenido de la carpeta virtual.'}</p>
+                {activeDesktopItems.length === 0 ? <p>Esta ubicacion aun no tiene elementos.</p> : null}
+                {activeDesktopFolders.length ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Carpetas</strong>
+                    <div className="finder-folder-grid">
+                      {activeDesktopFolders.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="finder-folder-tile"
+                          onClick={() => navigateFinder(windowItem.id, createDesktopFolderRoute(item.id))}
+                        >
+                          <span className="finder-folder-icon" aria-hidden="true" />
+                          <strong>{item.name}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeDesktopFiles.length ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Documentos</strong>
+                    <div className="finder-file-list">
+                      {activeDesktopFiles.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="finder-file-row interactive"
+                          onClick={() => openDesktopDocument(item.id)}
+                        >
+                          <strong>{item.name}</strong>
+                          <span>Documento de texto</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {activeRoute === 'trash' ? (
+              <div className="device-panel">
+                <div className="trash-header">
+                  <div>
+                    <h2>Papelera</h2>
+                    <p>Los elementos eliminados del escritorio virtual quedan aqui hasta vaciarla.</p>
+                  </div>
+                  <button type="button" onClick={emptyTrash}>Vaciar papelera</button>
+                </div>
+                {trashItems.length === 0 ? <p>La papelera esta vacia.</p> : null}
+                {trashItems.length ? (
+                  <div className="finder-file-list">
+                    {trashItems.map((item) => (
+                      <div key={item.id} className="finder-file-row finder-trash-row">
+                        <div className="finder-trash-meta">
+                          <strong>{item.name}</strong>
+                          <span>{item.kind === 'folder' ? 'Carpeta' : 'Documento de texto'}</span>
+                        </div>
+                        <div className="finder-trash-actions">
+                          <button type="button" onClick={() => restoreDesktopItem(item.id)}>Restaurar</button>
+                          <button type="button" onClick={() => permanentlyDeleteDesktopItem(item.id)}>Eliminar</button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
             ) : null}
 
             {activeRoute === 'device' ? (
@@ -3744,6 +4304,35 @@ function App() {
     )
   }
 
+  function renderTextEditContent(windowItem: WindowState) {
+    const documentItem = desktopItems.find((item) => item.id === windowItem.textDocumentId && item.kind === 'text') ?? null
+
+    if (!documentItem) {
+      return (
+        <div className="textedit-view textedit-empty">
+          <p>Este documento ya no existe en el escritorio virtual.</p>
+        </div>
+      )
+    }
+
+    return (
+      <div className="textedit-view">
+        <input
+          className="textedit-title-input"
+          value={documentItem.name}
+          onChange={(event) => updateDesktopDocument(documentItem.id, { name: event.target.value })}
+          placeholder="Nombre del documento"
+        />
+        <textarea
+          className="textedit-body-input"
+          value={documentItem.content}
+          onChange={(event) => updateDesktopDocument(documentItem.id, { content: event.target.value })}
+          placeholder="Escribe aqui..."
+        />
+      </div>
+    )
+  }
+
   function renderControlCenter() {
     return (
       <AnimatePresence>
@@ -4052,6 +4641,8 @@ function App() {
         return renderLauncherContent()
       case 'notes':
         return renderNotesContent()
+      case 'textedit':
+        return renderTextEditContent(windowItem)
       case 'calculator':
         return renderCalculatorContent(windowItem)
       case 'display':
@@ -4197,9 +4788,111 @@ function App() {
 
       {renderControlCenter()}
 
-      <section className="desktop-canvas">
+      <section
+        className="desktop-canvas"
+        onContextMenu={(event) => {
+          const target = event.target as HTMLElement
+          if (target.closest('.app-window, .desktop-volume-icon, .desktop-item-icon, .context-menu, .dock-wrap')) {
+            return
+          }
+
+          event.preventDefault()
+          openContextMenuAt({
+            type: 'desktop',
+            desktopX: event.clientX,
+            desktopY: event.clientY,
+          }, event.clientX, event.clientY)
+        }}
+      >
         <div className="wallpaper-glow wallpaper-glow-a" />
         <div className="wallpaper-glow wallpaper-glow-b" />
+
+        <button
+          type="button"
+          className="desktop-trash-icon"
+          style={{
+            left: Math.max(DESKTOP_SIDE_MARGIN + 16, window.innerWidth - DESKTOP_SIDE_MARGIN - 84),
+            top: Math.max(MENU_BAR_HEIGHT + 24, window.innerHeight - DOCK_HEIGHT - 132),
+          }}
+          onClick={(event) => {
+            if (event.detail < 2) {
+              return
+            }
+            openOrFocusFinderRoute('trash')
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            openContextMenuAt({ type: 'trash' }, event.clientX, event.clientY)
+          }}
+        >
+          <img className="desktop-item-art trash" src={trashItems.length ? '/trash2.png' : '/trash.png'} alt="" draggable={false} />
+          <strong>Papelera</strong>
+          <span>{trashItems.length ? `${trashItems.length} item${trashItems.length === 1 ? '' : 's'}` : 'Vacia'}</span>
+        </button>
+
+        {rootDesktopItems.map((item) => (
+          <button
+            key={item.id}
+            type="button"
+            className="desktop-item-icon"
+            style={{ left: item.x, top: item.y }}
+            onPointerDown={(event) => startDesktopItemDrag(event, item.id)}
+            onClick={(event) => {
+              if (editingDesktopItemId === item.id) {
+                return
+              }
+              if (event.detail < 2) {
+                return
+              }
+              if (item.kind === 'folder') {
+                openDesktopFolder(item.id)
+              } else {
+                openDesktopDocument(item.id)
+              }
+            }}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openContextMenuAt({
+                type: 'desktop-item',
+                itemId: item.id,
+                label: item.name,
+                kind: item.kind,
+              }, event.clientX, event.clientY)
+            }}
+          >
+            {item.kind === 'folder' ? (
+              <span className="desktop-item-art folder" aria-hidden="true" />
+            ) : (
+              <img className="desktop-item-art text" src="/texto.png" alt="" draggable={false} />
+            )}
+            {editingDesktopItemId === item.id ? (
+              <input
+                className="desktop-item-name-input"
+                value={editingDesktopItemName}
+                autoFocus
+                onChange={(event) => setEditingDesktopItemName(event.target.value)}
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onBlur={() => commitDesktopItemRename(item.id)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    commitDesktopItemRename(item.id)
+                  }
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    cancelDesktopItemRename()
+                  }
+                }}
+              />
+            ) : (
+              <strong>{item.name}</strong>
+            )}
+            <span>{item.kind === 'folder' ? 'Carpeta' : 'Documento'}</span>
+          </button>
+        ))}
 
         {deviceInfo?.volumes.map((volume, index) => {
           const position = getDesktopVolumePosition(volume, index)
@@ -4207,11 +4900,20 @@ function App() {
             <button
               key={volume.mount}
               type="button"
-              className="desktop-volume-icon"
-              style={{ left: position.x, top: position.y }}
-              onPointerDown={(event) => startDesktopVolumeDrag(event, volume.mount)}
-              onClick={() => openDesktopVolume(volume.mount)}
-            >
+            className="desktop-volume-icon"
+            style={{ left: position.x, top: position.y }}
+            onPointerDown={(event) => startDesktopVolumeDrag(event, volume.mount)}
+            onClick={() => openDesktopVolume(volume.mount)}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openContextMenuAt({
+                type: 'dock-volume',
+                mount: volume.mount,
+                label: volume.name,
+              }, event.clientX, event.clientY)
+            }}
+          >
               <img
                 className={`desktop-volume-art ${getDesktopVolumeKind(volume)}`}
                 src={getDesktopVolumeIconSrc(volume)}
@@ -4232,7 +4934,7 @@ function App() {
             const isActive = activeWindow?.id === item.id
             const title =
               item.appId === 'finder'
-                ? `Finder · ${getFinderLabel(getActiveFinderRoute(item.finderState))}`
+                ? `Finder · ${getFinderRouteLabel(getActiveFinderRoute(item.finderState))}`
                 : item.title
 
             return (
@@ -4317,6 +5019,81 @@ function App() {
           </button>
           <button type="button" onClick={() => openFinderWindow(contextMenu.route)}>
             Abrir en otra ventana
+          </button>
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'desktop' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button
+            type="button"
+            onClick={() => createDesktopItem('folder', { x: contextMenu.desktopX, y: contextMenu.desktopY })}
+          >
+            Nueva carpeta
+          </button>
+          <button
+            type="button"
+            onClick={() => createDesktopItem('text', { x: contextMenu.desktopX, y: contextMenu.desktopY })}
+          >
+            Nuevo documento de texto
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              openApp('display')
+              setContextMenu(null)
+            }}
+          >
+            Cambiar fondo
+          </button>
+          <button type="button" onClick={sortDesktopRootItems}>
+            Ordenar iconos
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setContextMenu(null)
+            }}
+          >
+            Actualizar
+          </button>
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'desktop-item' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button
+            type="button"
+            onClick={() => {
+              if (contextMenu.kind === 'folder') {
+                openDesktopFolder(contextMenu.itemId)
+              } else {
+                openDesktopDocument(contextMenu.itemId)
+              }
+              setContextMenu(null)
+            }}
+          >
+            Abrir {contextMenu.label}
+          </button>
+          <button type="button" onClick={() => renameDesktopItem(contextMenu.itemId)}>
+            Renombrar
+          </button>
+          <button type="button" onClick={() => deleteDesktopItem(contextMenu.itemId)}>
+            Mover a papelera
+          </button>
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'trash' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button type="button" onClick={() => {
+            openOrFocusFinderRoute('trash')
+            setContextMenu(null)
+          }}>
+            Abrir papelera
+          </button>
+          <button type="button" onClick={emptyTrash}>
+            Vaciar papelera
           </button>
         </div>
       ) : null}
