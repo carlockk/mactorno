@@ -20,6 +20,7 @@ type DeviceInfo = {
   homeDir: string
   userName: string
   userAvatar: string | null
+  systemWallpapers: Array<{ id: string; name: string; path: string }>
   volumes: Array<{
     name: string
     mount: string
@@ -87,6 +88,106 @@ async function getCachedValue<T>(cache: CacheEntry<T>, ttlMs: number, loader: ()
 
 function toGb(value: number) {
   return (value / 1024 / 1024 / 1024).toFixed(1)
+}
+
+function normalizeWallpaperCandidate(filePath: string) {
+  if (!filePath) {
+    return null
+  }
+
+  const normalized = filePath
+    .trim()
+    .replace(/^file:\/\//i, '')
+    .replace(/^"|"$/g, '')
+
+  if (!normalized || !fs.existsSync(normalized)) {
+    return null
+  }
+
+  return normalized
+}
+
+function collectWallpaperFiles(dirPath: string, maxDepth = 2) {
+  if (!dirPath || !fs.existsSync(dirPath)) {
+    return []
+  }
+
+  return walkFiles(dirPath, maxDepth).filter((filePath) => /\.(png|jpe?g|webp|bmp)$/i.test(filePath))
+}
+
+function createWallpaperList(paths: string[], prefix: string) {
+  const seen = new Set<string>()
+  return paths
+    .map((filePath) => normalizeWallpaperCandidate(filePath))
+    .filter((filePath): filePath is string => {
+      if (!filePath || seen.has(filePath.toLowerCase())) {
+        return false
+      }
+      seen.add(filePath.toLowerCase())
+      return true
+    })
+    .slice(0, 32)
+    .map((filePath, index) => ({
+      id: `${prefix}-${index}-${Buffer.from(filePath).toString('base64url').slice(0, 18)}`,
+      name: path.basename(filePath, path.extname(filePath)).replace(/[_-]+/g, ' '),
+      path: filePath,
+    }))
+}
+
+async function getWindowsSystemWallpapers() {
+  const candidates: string[] = []
+  const transcodedWallpaper = path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Themes', 'TranscodedWallpaper')
+  const cachedWallpaper = path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Themes', 'CachedFiles')
+  const windowsWeb = path.join(process.env.WINDIR ?? 'C:\\Windows', 'Web')
+
+  if (normalizeWallpaperCandidate(transcodedWallpaper)) {
+    candidates.push(transcodedWallpaper)
+  }
+
+  candidates.push(...collectWallpaperFiles(cachedWallpaper, 1))
+  candidates.push(...collectWallpaperFiles(path.join(windowsWeb, 'Wallpaper'), 3))
+  candidates.push(...collectWallpaperFiles(path.join(windowsWeb, '4K', 'Wallpaper'), 3))
+
+  return createWallpaperList(candidates, 'win-wallpaper')
+}
+
+async function getLinuxSystemWallpapers() {
+  const candidates: string[] = []
+  const currentPicture = await runCommand('bash', ['-lc', "gsettings get org.gnome.desktop.background picture-uri 2>/dev/null || true"])
+    .catch(() => '')
+  const currentDarkPicture = await runCommand('bash', ['-lc', "gsettings get org.gnome.desktop.background picture-uri-dark 2>/dev/null || true"])
+    .catch(() => '')
+
+  for (const value of [currentPicture, currentDarkPicture]) {
+    const match = value.match(/'file:\/\/(.+)'/)
+    if (match?.[1]) {
+      candidates.push(decodeURIComponent(match[1]))
+    }
+  }
+
+  candidates.push(...collectWallpaperFiles('/usr/share/backgrounds', 3))
+  candidates.push(...collectWallpaperFiles('/usr/share/wallpapers', 3))
+  candidates.push(...collectWallpaperFiles(path.join(os.homedir(), 'Pictures'), 2))
+
+  return createWallpaperList(candidates, 'linux-wallpaper')
+}
+
+async function getMacSystemWallpapers() {
+  const candidates: string[] = []
+  candidates.push(...collectWallpaperFiles('/System/Library/Desktop Pictures', 2))
+  candidates.push(...collectWallpaperFiles('/Library/Desktop Pictures', 2))
+  return createWallpaperList(candidates, 'mac-wallpaper')
+}
+
+async function getSystemWallpapers() {
+  switch (process.platform) {
+    case 'win32':
+      return getWindowsSystemWallpapers()
+    case 'darwin':
+      return getMacSystemWallpapers()
+    default:
+      return getLinuxSystemWallpapers()
+  }
 }
 
 function safeReadDir(dirPath: string) {
@@ -359,13 +460,46 @@ async function getUserAvatar() {
   }
 }
 
+function getWindowsSystemApps(): InstalledApp[] {
+  const system32 = path.join(process.env.WINDIR ?? 'C:\\Windows', 'System32')
+  const candidates = [
+    { file: 'notepad.exe', name: 'Notepad' },
+    { file: 'mspaint.exe', name: 'Paint' },
+    { file: 'SnippingTool.exe', name: 'Recortes' },
+    { file: 'write.exe', name: 'WordPad' },
+    { file: 'cmd.exe', name: 'Command Prompt' },
+    { file: 'WindowsPowerShell\\v1.0\\powershell.exe', name: 'Windows PowerShell' },
+    { file: 'regedit.exe', name: 'Registry Editor' },
+    { file: 'Taskmgr.exe', name: 'Task Manager' },
+    { file: 'control.exe', name: 'Control Panel' },
+    { file: 'explorer.exe', name: 'File Explorer' },
+  ]
+
+  return candidates
+    .map<InstalledApp | null>((entry) => {
+      const target = path.join(system32, entry.file)
+      if (!fs.existsSync(target)) {
+        return null
+      }
+
+      return {
+        id: Buffer.from(`system:${target}`).toString('base64url'),
+        name: entry.name,
+        target,
+        source: 'windows-system',
+        icon: null,
+      }
+    })
+    .filter((entry): entry is InstalledApp => entry !== null)
+}
+
 async function getWindowsApps() {
   const locations = [
     path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
     path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
   ]
 
-  const apps: InstalledApp[] = []
+  const apps: InstalledApp[] = [...getWindowsSystemApps()]
   for (const location of locations) {
     for (const filePath of walkFiles(location, 3)) {
       const extension = path.extname(filePath).toLowerCase()
@@ -388,10 +522,10 @@ async function getWindowsApps() {
     }
   }
 
-  const baseApps = uniqueApps(apps).slice(0, 120)
+  const baseApps = uniqueApps(apps).slice(0, 180)
   const enrichedApps = await Promise.all(
     baseApps.map(async (app, index) => {
-      if (index >= 24) {
+      if (index >= 48) {
         return app
       }
 
@@ -434,7 +568,7 @@ function getWindowsAppsFallback() {
     path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
   ]
 
-  const apps: InstalledApp[] = []
+  const apps: InstalledApp[] = [...getWindowsSystemApps()]
   for (const location of locations) {
     for (const filePath of walkFiles(location, 3)) {
       const extension = path.extname(filePath).toLowerCase()
@@ -457,7 +591,7 @@ function getWindowsAppsFallback() {
     }
   }
 
-  return uniqueApps(apps).slice(0, 120)
+  return uniqueApps(apps).slice(0, 180)
 }
 
 function getMacApps() {
@@ -708,6 +842,7 @@ async function getDeviceInfo(): Promise<DeviceInfo> {
       homeDir: os.homedir(),
       userName: os.userInfo().username,
       userAvatar: await getUserAvatar(),
+      systemWallpapers: await getSystemWallpapers(),
       volumes,
     }
   })

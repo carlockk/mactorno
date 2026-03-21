@@ -7,6 +7,7 @@ import {
   useTransform,
   type MotionValue,
 } from 'motion/react'
+import loginWallpaperSvg from './assets/login-wallpaper.svg'
 import './App.css'
 
 type AppId = 'finder' | 'notes' | 'textedit' | 'safari' | 'terminal' | 'launcher' | 'calculator' | 'photos' | 'videos' | 'display' | 'about' | 'docksettings'
@@ -114,6 +115,7 @@ type DeviceInfo = {
   homeDir: string
   userName: string
   userAvatar: string | null
+  systemWallpapers: Array<{ id: string; name: string; path: string }>
   volumes: Array<{ name: string; mount: string; totalGb: string; freeGb: string; kind: 'internal' | 'external' }>
 }
 
@@ -291,6 +293,11 @@ type WallpaperPreset = {
   name: string
   background: string
 }
+type WallpaperSelection =
+  | { kind: 'preset'; value: string }
+  | { kind: 'upload'; value: string; name: string }
+  | { kind: 'system'; value: string; name: string }
+  | { kind: 'asset'; value: string; name: string }
 type NoteItem = {
   id: string
   title: string
@@ -345,7 +352,8 @@ const CUSTOM_DOCK_STORAGE_KEY = 'mactorno-custom-dock-items'
 const APP_VISUAL_STORAGE_KEY = 'mactorno-app-visuals'
 const DESKTOP_VOLUME_POSITIONS_STORAGE_KEY = 'mactorno-desktop-volume-positions'
 const APPEARANCE_MODE_STORAGE_KEY = 'mactorno-appearance-mode'
-const WALLPAPER_STORAGE_KEY = 'mactorno-wallpaper-id'
+const DESKTOP_WALLPAPER_STORAGE_KEY = 'mactorno-desktop-wallpaper'
+const LOGIN_WALLPAPER_STORAGE_KEY = 'mactorno-login-wallpaper'
 const NOTES_STORAGE_KEY = 'mactorno-notes'
 const DESKTOP_ITEMS_STORAGE_KEY = 'mactorno-desktop-items'
 const DESKTOP_TRASH_POSITION_STORAGE_KEY = 'mactorno-desktop-trash-position'
@@ -403,6 +411,8 @@ const WALLPAPER_PRESETS: WallpaperPreset[] = [
       'radial-gradient(circle at 18% 16%, rgba(255, 178, 229, 0.28), transparent 20%), radial-gradient(circle at 84% 22%, rgba(130, 183, 255, 0.24), transparent 24%), linear-gradient(160deg, #120f26 0%, #291b4d 34%, #453380 68%, #0f6a8e 100%)',
   },
 ]
+const DEFAULT_DESKTOP_WALLPAPER: WallpaperSelection = { kind: 'preset', value: WALLPAPER_PRESETS[0].id }
+const DEFAULT_LOGIN_WALLPAPER: WallpaperSelection = { kind: 'asset', value: 'login-default', name: 'Inicio clásico' }
 
 const APPS: DesktopApp[] = [
   { id: 'finder', name: 'Finder', accent: 'linear-gradient(135deg, #7fd1ff 0%, #2f84ff 100%)', icon: 'F', menu: ['Archivo', 'Edicion', 'Ver', 'Ir', 'Ventana', 'Ayuda'], dockable: true },
@@ -585,6 +595,32 @@ function getMediaSource(filePath: string) {
     : `/api/media-file?path=${encodeURIComponent(filePath)}`
 }
 
+function getWallpaperPreviewSource(selection: WallpaperSelection) {
+  switch (selection.kind) {
+    case 'preset': {
+      const preset = WALLPAPER_PRESETS.find((item) => item.id === selection.value) ?? WALLPAPER_PRESETS[0]
+      return { type: 'gradient' as const, value: preset.background, label: preset.name }
+    }
+    case 'asset':
+      return { type: 'image' as const, value: loginWallpaperSvg, label: selection.name }
+    case 'system':
+      return { type: 'image' as const, value: getMediaSource(selection.value), label: selection.name }
+    case 'upload':
+      return { type: 'image' as const, value: selection.value, label: selection.name }
+  }
+}
+
+function getWallpaperBackground(selection: WallpaperSelection) {
+  const preview = getWallpaperPreviewSource(selection)
+  return preview.type === 'gradient'
+    ? preview.value
+    : `url("${preview.value}") center center / cover no-repeat`
+}
+
+function isWallpaperSelectionActive(current: WallpaperSelection, candidate: WallpaperSelection) {
+  return current.kind === candidate.kind && current.value === candidate.value
+}
+
 function formatTime(date: Date) {
   return new Intl.DateTimeFormat('es-CL', {
     weekday: 'short',
@@ -689,13 +725,39 @@ function loadAppearanceMode() {
   return raw === 'dark' ? 'dark' : 'classic'
 }
 
-function loadWallpaperId() {
-  if (typeof window === 'undefined') {
-    return WALLPAPER_PRESETS[0].id
+function isValidWallpaperSelection(value: unknown): value is WallpaperSelection {
+  if (!value || typeof value !== 'object' || !('kind' in value) || !('value' in value)) {
+    return false
   }
 
-  const raw = window.localStorage.getItem(WALLPAPER_STORAGE_KEY)
-  return WALLPAPER_PRESETS.some((preset) => preset.id === raw) ? raw! : WALLPAPER_PRESETS[0].id
+  const selection = value as WallpaperSelection
+  if (selection.kind === 'preset') {
+    return WALLPAPER_PRESETS.some((preset) => preset.id === selection.value)
+  }
+
+  if (selection.kind === 'asset') {
+    return selection.value === DEFAULT_LOGIN_WALLPAPER.value
+  }
+
+  return typeof selection.value === 'string' && selection.value.length > 0
+}
+
+function loadWallpaperSelection(storageKey: string, fallback: WallpaperSelection) {
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  try {
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) {
+      return fallback
+    }
+
+    const parsed = JSON.parse(raw)
+    return isValidWallpaperSelection(parsed) ? parsed : fallback
+  } catch {
+    return fallback
+  }
 }
 
 function loadNotes() {
@@ -975,6 +1037,10 @@ function getAppLauncherIcon(app: InstalledApp) {
   return (name.trim()[0] || 'A').toUpperCase()
 }
 
+function renderInstalledAppIcon(app: InstalledApp, className = 'app-row-icon') {
+  return <span className={className}>{getAppLauncherIcon(app)}</span>
+}
+
 function clampControlValue(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
@@ -1237,7 +1303,12 @@ function App() {
   const [appVisualOverrides, setAppVisualOverrides] = useState<AppVisualOverrides>(() => loadAppVisualOverrides())
   const [desktopVolumePositions, setDesktopVolumePositions] = useState<Record<string, { x: number; y: number }>>(() => loadDesktopVolumePositions())
   const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => loadAppearanceMode())
-  const [wallpaperId, setWallpaperId] = useState(() => loadWallpaperId())
+  const [desktopWallpaper, setDesktopWallpaper] = useState<WallpaperSelection>(() =>
+    loadWallpaperSelection(DESKTOP_WALLPAPER_STORAGE_KEY, DEFAULT_DESKTOP_WALLPAPER),
+  )
+  const [loginWallpaper, setLoginWallpaper] = useState<WallpaperSelection>(() =>
+    loadWallpaperSelection(LOGIN_WALLPAPER_STORAGE_KEY, DEFAULT_LOGIN_WALLPAPER),
+  )
   const [notes, setNotes] = useState<NoteItem[]>(() => loadNotes())
   const [desktopItems, setDesktopItems] = useState<DesktopItem[]>(() => loadDesktopItems())
   const [desktopTrashPosition, setDesktopTrashPosition] = useState<{ x: number; y: number } | null>(() => loadDesktopTrashPosition())
@@ -1272,6 +1343,8 @@ function App() {
   const launcherPanelRef = useRef<HTMLDivElement | null>(null)
   const controlCenterRef = useRef<HTMLDivElement | null>(null)
   const runningGenies = useRef(new Set<string>())
+  const dragPreviewRef = useRef<{ id: string; x: number; y: number } | null>(null)
+  const resizePreviewRef = useRef<{ id: string; width: number; height: number } | null>(null)
   const desktopVolumeDragRef = useRef<DesktopVolumeDragState | null>(null)
   const skipDesktopVolumeClickRef = useRef<string | null>(null)
   const desktopItemDragRef = useRef<DesktopItemDragState | null>(null)
@@ -1286,7 +1359,8 @@ function App() {
   const [openAppMenu, setOpenAppMenu] = useState<string | null>(null)
   const [photoViewStates, setPhotoViewStates] = useState<Record<string, PhotoViewState>>({})
   const [videoPlaybackState, setVideoPlaybackState] = useState<Record<string, { playing: boolean; muted: boolean; rate: number }>>({})
-  const wallpaperPreset = WALLPAPER_PRESETS.find((preset) => preset.id === wallpaperId) ?? WALLPAPER_PRESETS[0]
+  const desktopWallpaperBackground = getWallpaperBackground(desktopWallpaper)
+  const loginWallpaperBackground = getWallpaperBackground(loginWallpaper)
   const activeNote = notes.find((note) => note.id === selectedNoteId) ?? notes[0] ?? null
   const rootDesktopItems = useMemo(
     () => desktopItems.filter((item) => item.parentId === null && item.trashedAt === null),
@@ -1298,6 +1372,10 @@ function App() {
     return trashed.filter((item) => !item.parentId || !trashedIds.has(item.parentId))
   }, [desktopItems])
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
+  const visibleWindowCount = useMemo(
+    () => windows.filter((item) => !item.minimized && !item.genie?.removeOnFinish).length,
+    [windows],
+  )
   const visibleDockAppIds = useMemo(() => {
     const runningDockableApps = windows
       .map((item) => item.appId)
@@ -1503,6 +1581,16 @@ function App() {
     reader.readAsDataURL(file)
   }
 
+  function readWallpaperFile(file: File, onLoad: (selection: WallpaperSelection) => void) {
+    readIconFile(file, (value) => {
+      onLoad({
+        kind: 'upload',
+        value,
+        name: file.name.replace(/\.[^.]+$/, ''),
+      })
+    })
+  }
+
   function updateAppVisual(appId: AppId, patch: { icon?: DockIconSpec; accent?: string }) {
     setAppVisualOverrides((current) => ({
       ...current,
@@ -1683,8 +1771,12 @@ function App() {
   }, [appearanceMode])
 
   useEffect(() => {
-    window.localStorage.setItem(WALLPAPER_STORAGE_KEY, wallpaperId)
-  }, [wallpaperId])
+    window.localStorage.setItem(DESKTOP_WALLPAPER_STORAGE_KEY, JSON.stringify(desktopWallpaper))
+  }, [desktopWallpaper])
+
+  useEffect(() => {
+    window.localStorage.setItem(LOGIN_WALLPAPER_STORAGE_KEY, JSON.stringify(loginWallpaper))
+  }, [loginWallpaper])
 
   useEffect(() => {
     window.localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(notes))
@@ -1794,24 +1886,38 @@ function App() {
     }
 
     const activeDrag = drag
+    const targetWindow = windows.find((item) => item.id === activeDrag.id)
+    if (!targetWindow) {
+      return undefined
+    }
+
+    const targetWindowWidth = targetWindow.width
+    const targetWindowHeight = targetWindow.height
+    const windowNode = windowRefs.current[activeDrag.id]
     function onPointerMove(event: PointerEvent) {
-      setWindows((current) =>
-        current.map((item) => {
-          if (item.id !== activeDrag.id) {
-            return item
-          }
-          const maxX = Math.max(24, window.innerWidth - item.width - 24)
-          const maxY = Math.max(84, window.innerHeight - item.height - 120)
-          return {
-            ...item,
-            x: clamp(event.clientX - activeDrag.offsetX, 24, maxX),
-            y: clamp(event.clientY - activeDrag.offsetY, 52, maxY),
-          }
-        }),
-      )
+      const maxX = Math.max(24, window.innerWidth - targetWindowWidth - 24)
+      const maxY = Math.max(84, window.innerHeight - targetWindowHeight - 120)
+      const nextX = clamp(event.clientX - activeDrag.offsetX, 24, maxX)
+      const nextY = clamp(event.clientY - activeDrag.offsetY, 52, maxY)
+
+      dragPreviewRef.current = { id: activeDrag.id, x: nextX, y: nextY }
+      if (windowNode) {
+        windowNode.style.transform = `translate(${nextX}px, ${nextY}px)`
+      }
     }
 
     function onPointerUp() {
+      const preview = dragPreviewRef.current
+      if (preview?.id === activeDrag.id) {
+        setWindows((current) =>
+          current.map((item) =>
+            item.id === activeDrag.id
+              ? { ...item, x: preview.x, y: preview.y }
+              : item,
+          ),
+        )
+      }
+      dragPreviewRef.current = null
       setDrag(null)
     }
 
@@ -1821,7 +1927,7 @@ function App() {
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('pointerup', onPointerUp)
     }
-  }, [drag])
+  }, [drag, windows])
 
   useEffect(() => {
     if (!resize) {
@@ -1829,27 +1935,40 @@ function App() {
     }
 
     const activeResize = resize
+    const targetWindow = windows.find((item) => item.id === activeResize.id)
+    if (!targetWindow) {
+      return undefined
+    }
+
+    const targetWindowX = targetWindow.x
+    const targetWindowY = targetWindow.y
+    const windowNode = windowRefs.current[activeResize.id]
     function onPointerMove(event: PointerEvent) {
-      setWindows((current) =>
-        current.map((item) => {
-          if (item.id !== activeResize.id) {
-            return item
-          }
+      const desktop = getDesktopBounds()
+      const maxWidth = desktop.x + desktop.width - targetWindowX
+      const maxHeight = desktop.y + desktop.height - targetWindowY
+      const nextWidth = clamp(activeResize.startWidth + (event.clientX - activeResize.startX), MIN_WINDOW_WIDTH, maxWidth)
+      const nextHeight = clamp(activeResize.startHeight + (event.clientY - activeResize.startY), MIN_WINDOW_HEIGHT, maxHeight)
 
-          const desktop = getDesktopBounds()
-          const maxWidth = desktop.x + desktop.width - item.x
-          const maxHeight = desktop.y + desktop.height - item.y
-
-          return {
-            ...item,
-            width: clamp(activeResize.startWidth + (event.clientX - activeResize.startX), MIN_WINDOW_WIDTH, maxWidth),
-            height: clamp(activeResize.startHeight + (event.clientY - activeResize.startY), MIN_WINDOW_HEIGHT, maxHeight),
-          }
-        }),
-      )
+      resizePreviewRef.current = { id: activeResize.id, width: nextWidth, height: nextHeight }
+      if (windowNode) {
+        windowNode.style.width = `${nextWidth}px`
+        windowNode.style.height = `${nextHeight}px`
+      }
     }
 
     function onPointerUp() {
+      const preview = resizePreviewRef.current
+      if (preview?.id === activeResize.id) {
+        setWindows((current) =>
+          current.map((item) =>
+            item.id === activeResize.id
+              ? { ...item, width: preview.width, height: preview.height }
+              : item,
+          ),
+        )
+      }
+      resizePreviewRef.current = null
       setResize(null)
     }
 
@@ -1859,7 +1978,7 @@ function App() {
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('pointerup', onPointerUp)
     }
-  }, [resize])
+  }, [resize, windows])
 
   useEffect(() => {
     function closeContextMenu() {
@@ -4204,16 +4323,36 @@ function App() {
     const canGoBack = !!activeTab && activeTab.historyIndex > 0
     const canGoForward = !!activeTab && activeTab.historyIndex < activeTab.history.length - 1
     const viewMode = finderState?.viewMode ?? 'icons'
+    const renderFinderListHeader = (secondaryLabel: string) => (
+      <div className="finder-list-head" aria-hidden="true">
+        <span>Nombre</span>
+        <span>{secondaryLabel}</span>
+      </div>
+    )
 
     return (
       <div className="finder-shell">
         <div className="finder-browser-bar">
           <div className="finder-nav-group">
-            <button type="button" disabled={!canGoBack} onClick={() => moveFinderHistory(windowItem.id, -1)}>
-              Atras
+            <button
+              type="button"
+              className="finder-toolbar-icon"
+              disabled={!canGoBack}
+              onClick={() => moveFinderHistory(windowItem.id, -1)}
+              aria-label="Atrás"
+              title="Atrás"
+            >
+              ‹
             </button>
-            <button type="button" disabled={!canGoForward} onClick={() => moveFinderHistory(windowItem.id, 1)}>
-              Adelante
+            <button
+              type="button"
+              className="finder-toolbar-icon"
+              disabled={!canGoForward}
+              onClick={() => moveFinderHistory(windowItem.id, 1)}
+              aria-label="Adelante"
+              title="Adelante"
+            >
+              ›
             </button>
           </div>
           <strong>{getFinderRouteLabel(activeRoute)}</strong>
@@ -4223,19 +4362,29 @@ function App() {
                 type="button"
                 className={viewMode === 'icons' ? 'active' : ''}
                 onClick={() => updateFinderViewMode(windowItem.id, 'icons')}
+                aria-label="Vista por iconos"
+                title="Vista por iconos"
               >
-                Iconos
+                ⊞
               </button>
               <button
                 type="button"
                 className={viewMode === 'list' ? 'active' : ''}
                 onClick={() => updateFinderViewMode(windowItem.id, 'list')}
+                aria-label="Vista por lista"
+                title="Vista por lista"
               >
-                Lista
+                ☰
               </button>
             </div>
-            <button type="button" onClick={() => openFinderTab(windowItem.id, activeRoute)}>
-              Nueva pestana
+            <button
+              type="button"
+              className="finder-toolbar-icon"
+              onClick={() => openFinderTab(windowItem.id, activeRoute)}
+              aria-label="Nueva pestaña"
+              title="Nueva pestaña"
+            >
+              +
             </button>
           </div>
         </div>
@@ -4369,6 +4518,7 @@ function App() {
                  {activeDesktopFolders.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas</strong>
+                    {renderFinderListHeader('Tipo')}
                     <div className="finder-file-list">
                       {activeDesktopFolders.map((item) => (
                         <button
@@ -4387,6 +4537,7 @@ function App() {
                 {activeDesktopFiles.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Documentos</strong>
+                    {renderFinderListHeader('Tipo')}
                     <div className="finder-file-list">
                       {activeDesktopFiles.map((item) => (
                         <button
@@ -4455,6 +4606,7 @@ function App() {
                 {activeImportedFolders.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas importadas</strong>
+                    {renderFinderListHeader('Tipo')}
                     <div className="finder-file-list">
                       {activeImportedFolders.map((entry) => (
                         <button
@@ -4483,6 +4635,7 @@ function App() {
                 {activeImportedFiles.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Archivos importados</strong>
+                    {renderFinderListHeader('Tamaño')}
                     <div className="finder-file-list">
                       {activeImportedFiles.map((entry) => (
                         <button
@@ -4568,7 +4721,9 @@ function App() {
                 </div>
                 {trashItems.length === 0 ? <p>La papelera esta vacia.</p> : null}
                 {trashItems.length ? (
-                  <div className="finder-file-list">
+                  <>
+                    {renderFinderListHeader('Tipo')}
+                    <div className="finder-file-list">
                     {trashItems.map((item) => (
                       <div key={item.id} className="finder-file-row finder-trash-row">
                         <div className="finder-trash-meta">
@@ -4581,7 +4736,8 @@ function App() {
                         </div>
                       </div>
                     ))}
-                  </div>
+                    </div>
+                  </>
                 ) : null}
               </div>
             ) : null}
@@ -4642,8 +4798,13 @@ function App() {
                         })
                       }}
                     >
-                      <strong>{app.name}</strong>
-                      <span>{app.source}</span>
+                      <span className="app-row-main">
+                        {renderInstalledAppIcon(app)}
+                        <span className="app-row-copy">
+                          <strong>{app.name}</strong>
+                          <span>{app.source}</span>
+                        </span>
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -4781,6 +4942,7 @@ function App() {
                 {activeVolumeFolders.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas</strong>
+                    {renderFinderListHeader('Tipo')}
                     <div className="finder-file-list">
                       {activeVolumeFolders.map((entry) => (
                         <button
@@ -4812,6 +4974,7 @@ function App() {
                 {activeVolumeFiles.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Archivos</strong>
+                    {renderFinderListHeader('Tamaño')}
                     <div className="finder-file-list">
                       {activeVolumeFiles.map((entry) => (
                         <button
@@ -4942,8 +5105,13 @@ function App() {
                 event.dataTransfer.effectAllowed = 'copy'
               }}
             >
-              <strong>{app.name}</strong>
-              <span>{app.source}</span>
+              <span className="app-row-main">
+                {renderInstalledAppIcon(app)}
+                <span className="app-row-copy">
+                  <strong>{app.name}</strong>
+                  <span>{app.source}</span>
+                </span>
+              </span>
               <span className="pin-hint" onClick={(event) => {
                 event.stopPropagation()
                 pinInstalledAppToDock(app)
@@ -5117,6 +5285,110 @@ function App() {
   }
 
   function renderDisplayContent() {
+    const systemWallpaperChoices = (deviceInfo?.systemWallpapers ?? []).map(
+      (wallpaper) =>
+        ({
+          kind: 'system',
+          value: wallpaper.path,
+          name: wallpaper.name,
+        }) satisfies WallpaperSelection,
+    )
+
+    function renderWallpaperSection(
+      title: string,
+      description: string,
+      selection: WallpaperSelection,
+      onChange: (next: WallpaperSelection) => void,
+      uploadLabel: string,
+    ) {
+      const uploadId = `wallpaper-upload-${title.toLowerCase().replace(/\s+/g, '-')}`
+
+      return (
+        <section className="display-card">
+          <div className="display-card-head">
+            <div>
+              <strong>{title}</strong>
+              <p>{description}</p>
+            </div>
+            <label className="file-pill wallpaper-upload-pill" htmlFor={uploadId}>
+              {uploadLabel}
+              <input
+                id={uploadId}
+                type="file"
+                accept="image/*"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (!file) {
+                    return
+                  }
+                  readWallpaperFile(file, onChange)
+                  event.currentTarget.value = ''
+                }}
+              />
+            </label>
+          </div>
+
+          <div className="wallpaper-grid">
+            {(title === 'Fondo de inicio' ? [DEFAULT_LOGIN_WALLPAPER] : []).map((choice) => {
+              const preview = getWallpaperPreviewSource(choice)
+              return (
+                <button
+                  key={`${choice.kind}-${choice.value}`}
+                  type="button"
+                  className={`wallpaper-preset${isWallpaperSelectionActive(selection, choice) ? ' active' : ''}`}
+                  onClick={() => onChange(choice)}
+                >
+                  <span
+                    className="wallpaper-swatch"
+                    style={
+                      preview.type === 'gradient'
+                        ? { background: preview.value }
+                        : { backgroundImage: `url("${preview.value}")` }
+                    }
+                  />
+                  <strong>{preview.label}</strong>
+                </button>
+              )
+            })}
+            {WALLPAPER_PRESETS.map((preset) => {
+              const choice: WallpaperSelection = { kind: 'preset', value: preset.id }
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`wallpaper-preset${isWallpaperSelectionActive(selection, choice) ? ' active' : ''}`}
+                  onClick={() => onChange(choice)}
+                >
+                  <span className="wallpaper-swatch" style={{ background: preset.background }} />
+                  <strong>{preset.name}</strong>
+                </button>
+              )
+            })}
+            {selection.kind === 'upload' ? (
+              <button type="button" className="wallpaper-preset active" onClick={() => onChange(selection)}>
+                <span className="wallpaper-swatch" style={{ backgroundImage: `url("${selection.value}")` }} />
+                <strong>{selection.name}</strong>
+              </button>
+            ) : null}
+            {systemWallpaperChoices.map((choice) => {
+              const preview = getWallpaperPreviewSource(choice)
+              return (
+                <button
+                  key={`${choice.kind}-${choice.value}`}
+                  type="button"
+                  className={`wallpaper-preset${isWallpaperSelectionActive(selection, choice) ? ' active' : ''}`}
+                  onClick={() => onChange(choice)}
+                >
+                  <span className="wallpaper-swatch" style={{ backgroundImage: `url("${preview.value}")` }} />
+                  <strong>{choice.name}</strong>
+                </button>
+              )
+            })}
+          </div>
+        </section>
+      )
+    }
+
     return (
       <div className="display-preferences">
         <section className="display-card">
@@ -5142,25 +5414,21 @@ function App() {
           </div>
         </section>
 
-        <section className="display-card">
-          <div>
-            <strong>Fondos de pantalla</strong>
-            <p>Presets locales optimizados para este entorno.</p>
-          </div>
-          <div className="wallpaper-grid">
-            {WALLPAPER_PRESETS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className={`wallpaper-preset${wallpaperId === preset.id ? ' active' : ''}`}
-                onClick={() => setWallpaperId(preset.id)}
-              >
-                <span className="wallpaper-swatch" style={{ background: preset.background }} />
-                <strong>{preset.name}</strong>
-              </button>
-            ))}
-          </div>
-        </section>
+        {renderWallpaperSection(
+          'Fondo de escritorio',
+          'Elige presets, sube una foto o usa un wallpaper detectado del sistema real.',
+          desktopWallpaper,
+          setDesktopWallpaper,
+          'Subir al escritorio',
+        )}
+
+        {renderWallpaperSection(
+          'Fondo de inicio',
+          'Configura por separado la pantalla de ingreso de Mactorno.',
+          loginWallpaper,
+          setLoginWallpaper,
+          'Subir al inicio',
+        )}
       </div>
     )
   }
@@ -5376,28 +5644,28 @@ function App() {
     const isBlocked = isBlockedEmbeddedPage(browserState.lastError)
 
     return (
-      <div className="browser-view chrome-view">
+      <div className={`browser-view chrome-view${windowItem.appId === 'safari' ? ' browser-inline-toolbar' : ''}`}>
         <div className="browser-controls">
-          <div className="finder-nav-group browser-actions">
-            <button type="button" disabled={!canGoBack} onClick={() => moveBrowserHistory(windowItem.id, -1)}>
-              Atras
-            </button>
-            <button type="button" disabled={!canGoForward} onClick={() => moveBrowserHistory(windowItem.id, 1)}>
-              Adelante
-            </button>
-            <button type="button" onClick={() => reloadBrowser(windowItem.id)}>
-              Recargar
+          <div className="browser-actions">
+            <button
+              type="button"
+              className="browser-icon-button"
+              disabled={!canGoBack}
+              onClick={() => moveBrowserHistory(windowItem.id, -1)}
+              aria-label="Atrás"
+              title="Atrás"
+            >
+              ‹
             </button>
             <button
               type="button"
-              onClick={() =>
-                commitBrowserNavigation(
-                  windowItem.id,
-                  SAFARI_HOME_URL,
-                )
-              }
+              className="browser-icon-button"
+              disabled={!canGoForward}
+              onClick={() => moveBrowserHistory(windowItem.id, 1)}
+              aria-label="Adelante"
+              title="Adelante"
             >
-              Home
+              ›
             </button>
           </div>
           <form
@@ -5407,18 +5675,38 @@ function App() {
               commitBrowserNavigation(windowItem.id, browserState.inputValue)
             }}
           >
+            <span className="browser-address-icon" aria-hidden="true">⌕</span>
             <input
               className="browser-address-input"
               value={browserState.inputValue}
               onChange={(event) => setBrowserInput(windowItem.id, event.target.value)}
-              placeholder="Escribe URL o busqueda"
+              placeholder="Buscar o escribir una URL"
             />
           </form>
+          <div className="browser-actions browser-actions-end">
+            <button
+              type="button"
+              className="browser-icon-button"
+              onClick={() => openSafariWindow()}
+              aria-label="Nueva ventana"
+              title="Nueva ventana"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="browser-icon-button"
+              onClick={() => reloadBrowser(windowItem.id)}
+              aria-label="Recargar"
+              title="Recargar"
+            >
+              ↻
+            </button>
+          </div>
         </div>
         <div className="browser-page browser-page-live">
-          {!isHome && (browserState.loading || browserState.lastError || browserState.title) ? (
+          {!isHome && (browserState.loading || browserState.lastError) ? (
             <div className="browser-meta">
-              {browserState.title ? <strong>{browserState.title}</strong> : null}
               {browserState.loading ? <span>Cargando pagina...</span> : null}
               {browserState.lastError ? <span className="browser-error">{browserState.lastError}</span> : null}
               {isBlocked ? (
@@ -5642,7 +5930,10 @@ function App() {
 
   if (!loggedIn) {
     return (
-      <main className={`login-screen${loginTransitioning ? ' exiting' : ''}`}>
+      <main
+        className={`login-screen${loginTransitioning ? ' exiting' : ''}`}
+        style={{ '--login-background': loginWallpaperBackground } as CSSProperties}
+      >
         <div className="login-clock-block" aria-hidden="true">
           <span className="login-clock-date">{clock.loginDate}</span>
           <strong className="login-clock-time">{clock.loginTime}</strong>
@@ -5677,8 +5968,8 @@ function App() {
 
   return (
     <main
-      className={`desktop-shell appearance-${appearanceMode}`}
-      style={{ '--desktop-background': wallpaperPreset.background } as CSSProperties}
+      className={`desktop-shell appearance-${appearanceMode}${visibleWindowCount > 1 ? ' desktop-heavy-windows' : ''}`}
+      style={{ '--desktop-background': desktopWallpaperBackground } as CSSProperties}
     >
       <header className="menu-bar">
         <div className="menu-left" ref={menuBarRef}>
@@ -5972,6 +6263,11 @@ function App() {
               item.appId === 'finder'
                 ? `Finder · ${getFinderRouteLabel(getActiveFinderRoute(item.finderState))}`
                 : item.title
+            const safariBrowserState = item.appId === 'safari' ? item.browserState : null
+            const safariCanGoBack = safariBrowserState ? safariBrowserState.historyIndex > 0 : false
+            const safariCanGoForward = safariBrowserState
+              ? safariBrowserState.historyIndex < safariBrowserState.history.length - 1
+              : false
 
             return (
               <article
@@ -5997,7 +6293,7 @@ function App() {
                   }}
                 >
                   <div
-                    className="window-toolbar"
+                    className={`window-toolbar${item.appId === 'safari' ? ' safari-toolbar' : ''}`}
                     style={{ borderRadius: item.maximized ? 0 : undefined }}
                     onPointerDown={(event) => startDrag(event, item.id)}
                     onDoubleClick={() => toggleMaximize(item.id)}
@@ -6025,12 +6321,85 @@ function App() {
                         onClick={() => toggleMaximize(item.id)}
                       />
                     </div>
-                    <div className="window-title">
-                      <span className="window-app-icon" style={{ background: app.accent }}>
-                        {renderDockIconContent(app.iconSpec)}
-                      </span>
-                      <span>{title}</span>
-                    </div>
+                    {item.appId === 'safari' && safariBrowserState ? (
+                      <>
+                        <div className="window-title safari-title">
+                          <span className="window-app-icon" style={{ background: app.accent }}>
+                            {renderDockIconContent(app.iconSpec)}
+                          </span>
+                          <span>{app.name}</span>
+                        </div>
+                        <div className="browser-actions safari-toolbar-actions">
+                          <button
+                            type="button"
+                            className="browser-icon-button"
+                            disabled={!safariCanGoBack}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => moveBrowserHistory(item.id, -1)}
+                            aria-label="Atrás"
+                            title="Atrás"
+                          >
+                            ‹
+                          </button>
+                          <button
+                            type="button"
+                            className="browser-icon-button"
+                            disabled={!safariCanGoForward}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => moveBrowserHistory(item.id, 1)}
+                            aria-label="Adelante"
+                            title="Adelante"
+                          >
+                            ›
+                          </button>
+                        </div>
+                        <form
+                          className="browser-address-form safari-toolbar-address"
+                          onPointerDown={(event) => event.stopPropagation()}
+                          onSubmit={(event) => {
+                            event.preventDefault()
+                            commitBrowserNavigation(item.id, safariBrowserState.inputValue)
+                          }}
+                        >
+                          <span className="browser-address-icon" aria-hidden="true">⌕</span>
+                          <input
+                            className="browser-address-input"
+                            value={safariBrowserState.inputValue}
+                            onChange={(event) => setBrowserInput(item.id, event.target.value)}
+                            placeholder="Buscar o escribir una URL"
+                          />
+                        </form>
+                        <div className="browser-actions browser-actions-end safari-toolbar-actions">
+                          <button
+                            type="button"
+                            className="browser-icon-button"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => openSafariWindow()}
+                            aria-label="Nueva ventana"
+                            title="Nueva ventana"
+                          >
+                            +
+                          </button>
+                          <button
+                            type="button"
+                            className="browser-icon-button"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => reloadBrowser(item.id)}
+                            aria-label="Recargar"
+                            title="Recargar"
+                          >
+                            ↻
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="window-title">
+                        <span className="window-app-icon" style={{ background: app.accent }}>
+                          {renderDockIconContent(app.iconSpec)}
+                        </span>
+                        <span>{title}</span>
+                      </div>
+                    )}
                   </div>
                   <div className="window-content" style={{ borderRadius: item.maximized ? 0 : undefined }}>
                     {renderWindowContent(item)}
