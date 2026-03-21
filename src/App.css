@@ -267,9 +267,13 @@ label {
   display: grid;
   place-items: center;
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: 700;
   background: rgba(255, 255, 255, 0.22);
+}
+
+.apple-mark svg {
+  width: 12px;
+  height: 12px;
+  display: block;
 }
 
 .apple-button {
