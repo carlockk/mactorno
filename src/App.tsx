@@ -187,6 +187,20 @@ type ContextMenuState =
       label: string
     }
   | {
+      type: 'finder-virtual'
+      x: number
+      y: number
+      windowId: string
+      parentId: string | null
+    }
+  | {
+      type: 'volume-entry'
+      x: number
+      y: number
+      label: string
+      entry: VolumeEntry
+    }
+  | {
       type: 'dock-app'
       x: number
       y: number
@@ -220,6 +234,38 @@ type AppMenuAction = 'media-open' | 'media-reveal' | 'media-open-system' | 'wind
   | 'video-toggle-mute'
   | 'video-speed-normal'
   | 'video-speed-fast'
+  | 'finder-new-folder'
+  | 'finder-new-text'
+  | 'finder-paste'
+  | 'finder-refresh'
+  | 'finder-go-back'
+  | 'finder-go-forward'
+  | 'finder-go-desktop'
+  | 'finder-go-computer'
+  | 'finder-go-trash'
+  | 'finder-go-device'
+  | 'finder-go-applications'
+  | 'finder-go-dock'
+  | 'finder-go-display'
+  | 'finder-new-window'
+  | 'finder-new-tab'
+  | 'about-open'
+  | 'finder-new-folder'
+  | 'finder-new-text'
+  | 'finder-paste'
+  | 'finder-refresh'
+  | 'finder-go-back'
+  | 'finder-go-forward'
+  | 'finder-go-desktop'
+  | 'finder-go-computer'
+  | 'finder-go-trash'
+  | 'finder-go-device'
+  | 'finder-go-applications'
+  | 'finder-go-dock'
+  | 'finder-go-display'
+  | 'finder-new-window'
+  | 'finder-new-tab'
+  | 'about-open'
 
 type PhotoViewState = {
   zoom: number
@@ -2232,6 +2278,60 @@ function App() {
       return []
     }
 
+    if (windowItem.appId === 'finder' && windowItem.finderState) {
+      const activeRoute = getActiveFinderRoute(windowItem.finderState)
+      const activeDesktopFolderId = getDesktopFolderIdFromRoute(activeRoute)
+      const canCreateVirtualContent = activeRoute === 'desktop' || !!activeDesktopFolderId
+      const activeTab = getActiveFinderTab(windowItem.finderState)
+      const canGoBack = !!activeTab && activeTab.historyIndex > 0
+      const canGoForward = !!activeTab && activeTab.historyIndex < activeTab.history.length - 1
+
+      switch (menuLabel) {
+        case 'Archivo':
+          return [
+            ...(canCreateVirtualContent ? [{ id: 'finder-new-folder' as const, label: 'Nueva carpeta' }] : []),
+            ...(canCreateVirtualContent ? [{ id: 'finder-new-text' as const, label: 'Nuevo documento de texto' }] : []),
+            { id: 'finder-new-window', label: 'Nueva ventana de Finder' },
+            { id: 'finder-new-tab', label: 'Nueva pestana' },
+            { id: 'window-close', label: 'Cerrar ventana' },
+          ]
+        case 'Edicion':
+          return [
+            ...(desktopClipboard ? [{ id: 'finder-paste' as const, label: 'Pegar' }] : []),
+            { id: 'finder-refresh', label: 'Actualizar' },
+          ]
+        case 'Ver':
+          return [
+            { id: 'finder-refresh', label: 'Actualizar' },
+          ]
+        case 'Ir':
+          return [
+            ...(canGoBack ? [{ id: 'finder-go-back' as const, label: 'Atras' }] : []),
+            ...(canGoForward ? [{ id: 'finder-go-forward' as const, label: 'Adelante' }] : []),
+            { id: 'finder-go-desktop', label: 'Escritorio' },
+            { id: 'finder-go-computer', label: 'Equipo' },
+            { id: 'finder-go-trash', label: 'Papelera' },
+            { id: 'finder-go-device', label: 'Dispositivo' },
+            { id: 'finder-go-applications', label: 'Aplicaciones' },
+            { id: 'finder-go-dock', label: 'Dock' },
+            { id: 'finder-go-display', label: 'Pantalla' },
+          ]
+        case 'Ventana':
+          return [
+            { id: 'window-minimize', label: 'Minimizar ventana' },
+            { id: 'finder-new-window', label: 'Nueva ventana' },
+            { id: 'finder-new-tab', label: 'Nueva pestana' },
+            { id: 'window-close', label: 'Cerrar ventana' },
+          ]
+        case 'Ayuda':
+          return [
+            { id: 'about-open', label: 'Acerca de Mactorno' },
+          ]
+        default:
+          return []
+      }
+    }
+
     if (windowItem.appId === 'photos') {
       switch (menuLabel) {
         case 'Archivo':
@@ -2299,7 +2399,72 @@ function App() {
 
     setOpenAppMenu(null)
 
+    const activeFinderRoute = activeWindow.finderState ? getActiveFinderRoute(activeWindow.finderState) : null
+    const activeDesktopFolderId = activeFinderRoute ? getDesktopFolderIdFromRoute(activeFinderRoute) : null
+
     switch (action) {
+      case 'finder-new-folder':
+        createDesktopItem('folder', undefined, activeDesktopFolderId ?? null)
+        return
+      case 'finder-new-text':
+        createDesktopItem('text', undefined, activeDesktopFolderId ?? null)
+        return
+      case 'finder-paste':
+        pasteDesktopClipboard(undefined, activeDesktopFolderId ?? null)
+        return
+      case 'finder-refresh':
+        if (activeFinderRoute) {
+          const targetPath = getVolumePathFromRoute(activeFinderRoute)
+          if (targetPath) {
+            setVolumeEntriesByMount((current) => {
+              const next = { ...current }
+              delete next[targetPath]
+              return next
+            })
+            setLoadingVolumeMounts((current) => {
+              const next = { ...current }
+              delete next[targetPath]
+              return next
+            })
+          }
+        }
+        return
+      case 'finder-go-back':
+        moveFinderHistory(activeWindow.id, -1)
+        return
+      case 'finder-go-forward':
+        moveFinderHistory(activeWindow.id, 1)
+        return
+      case 'finder-go-desktop':
+        navigateFinder(activeWindow.id, 'desktop')
+        return
+      case 'finder-go-computer':
+        navigateFinder(activeWindow.id, 'computer')
+        return
+      case 'finder-go-trash':
+        navigateFinder(activeWindow.id, 'trash')
+        return
+      case 'finder-go-device':
+        navigateFinder(activeWindow.id, 'device')
+        return
+      case 'finder-go-applications':
+        navigateFinder(activeWindow.id, 'applications')
+        return
+      case 'finder-go-dock':
+        navigateFinder(activeWindow.id, 'dock')
+        return
+      case 'finder-go-display':
+        navigateFinder(activeWindow.id, 'display')
+        return
+      case 'finder-new-window':
+        openFinderWindow(activeFinderRoute ?? 'computer')
+        return
+      case 'finder-new-tab':
+        openFinderTab(activeWindow.id, activeFinderRoute ?? 'computer')
+        return
+      case 'about-open':
+        openApp('about')
+        return
       case 'media-open':
         await pickMediaFile(activeWindow.id, activeWindow.appId === 'videos' ? 'video' : 'photo')
         return
@@ -4041,7 +4206,26 @@ function App() {
             ) : null}
 
             {activeRoute === 'desktop' || activeDesktopFolderId ? (
-              <div className="device-panel">
+              <div
+                className="device-panel"
+                onContextMenu={(event) => {
+                  const target = event.target as HTMLElement
+                  if (
+                    target.closest('.finder-folder-tile, .finder-file-row, .context-menu') ||
+                    !desktopClipboard
+                  ) {
+                    return
+                  }
+
+                  event.preventDefault()
+                  event.stopPropagation()
+                  openContextMenuAt({
+                    type: 'finder-virtual',
+                    windowId: windowItem.id,
+                    parentId: activeDesktopFolderId ?? null,
+                  }, event.clientX, event.clientY)
+                }}
+              >
                 <h2>{getFinderRouteLabel(activeRoute)}</h2>
                 <p>{activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : activeDesktopFolder?.sourcePath ? activeDesktopFolder.sourcePath : 'Contenido de la carpeta virtual.'}</p>
                 {!activeImportedLoading && activeDesktopItems.length === 0 && activeImportedEntries.length === 0 ? <p>Esta ubicacion aun no tiene elementos.</p> : null}
@@ -4130,7 +4314,11 @@ function App() {
                           })()}
                           onContextMenu={(event) => {
                             event.preventDefault()
-                            copyVolumeEntry(entry)
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
                           }}
                         >
                           <strong>{entry.name}</strong>
@@ -4350,7 +4538,11 @@ function App() {
                           }}
                           onContextMenu={(event) => {
                             event.preventDefault()
-                            copyVolumeEntry(entry)
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
                           }}
                         >
                           <span className="finder-folder-icon" aria-hidden="true" />
@@ -4387,7 +4579,11 @@ function App() {
                           })()}
                           onContextMenu={(event) => {
                             event.preventDefault()
-                            copyVolumeEntry(entry)
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
                           }}
                         >
                           <strong>{entry.name}</strong>
@@ -5519,6 +5715,24 @@ function App() {
           </button>
           <button type="button" onClick={() => openFinderWindow(contextMenu.route)}>
             Abrir en otra ventana
+          </button>
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'finder-virtual' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          {desktopClipboard ? (
+            <button type="button" onClick={() => pasteDesktopClipboard(undefined, contextMenu.parentId)}>
+              Pegar
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
+      {contextMenu?.type === 'volume-entry' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button type="button" onClick={() => copyVolumeEntry(contextMenu.entry)}>
+            Copiar {contextMenu.label}
           </button>
         </div>
       ) : null}

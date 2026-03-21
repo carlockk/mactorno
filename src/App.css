@@ -2379,10 +2379,10 @@ label {
   gap: 6px;
   min-width: 220px;
   padding: 8px;
-  border-radius: 12px;
-  background: rgba(14, 18, 26, 0.88);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
+  border-radius: 9px;
+  background: rgba(14, 18, 26, 0.72);
+  backdrop-filter: blur(24px) saturate(1.08);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
 }
 
 .context-menu button {
