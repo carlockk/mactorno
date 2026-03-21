@@ -214,6 +214,96 @@ function resolveMacIcon(appPath) {
   }
 }
 
+async function resolveWindowsUserAvatar() {
+  const registryOutput = await runCommand('powershell.exe', [
+    '-NoProfile',
+    '-Command',
+    "$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; $key = \"HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AccountPicture\\Users\\$sid\"; if (Test-Path $key) { $props = Get-ItemProperty -Path $key; $candidates = @($props.Image1080,$props.Image448,$props.Image424,$props.Image240,$props.Image208,$props.Image192,$props.Image96,$props.Image64,$props.Image48,$props.Image40,$props.Image32) | Where-Object { $_ -and (Test-Path $_) }; if ($candidates.Count -gt 0) { $candidates[0] } }",
+  ])
+  const registryPath = registryOutput.trim()
+  if (registryPath && fs.existsSync(registryPath)) {
+    return fileToDataUrl(registryPath)
+  }
+
+  const homeDir = os.homedir()
+  const candidates = [
+    path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'AccountPictures'),
+    path.join(homeDir, 'AppData', 'Roaming', 'Microsoft', 'Windows', 'AccountPictures'),
+    path.join(process.env.PUBLIC ?? 'C:\\Users\\Public', 'AccountPictures'),
+  ]
+
+  for (const dir of candidates) {
+    if (!dir || !fs.existsSync(dir)) {
+      continue
+    }
+
+    const files = safeReadDir(dir)
+      .filter((entry) => !entry.isDirectory() && /\.(png|jpg|jpeg|bmp)$/i.test(entry.name))
+      .map((entry) => path.join(dir, entry.name))
+      .sort((left, right) => {
+        try {
+          return fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs
+        } catch {
+          return 0
+        }
+      })
+
+    if (files[0]) {
+      return fileToDataUrl(files[0])
+    }
+  }
+
+  return null
+}
+
+function resolveMacUserAvatar() {
+  const homeDir = os.homedir()
+  const candidates = [
+    path.join(homeDir, 'Library', 'Images', 'Profile Pictures'),
+    '/Library/User Pictures',
+  ]
+
+  for (const candidate of candidates) {
+    if (!fs.existsSync(candidate)) {
+      continue
+    }
+
+    const files = walkFiles(candidate, 2).filter((filePath) => /\.(png|jpg|jpeg)$/i.test(filePath))
+    if (files[0]) {
+      return fileToDataUrl(files[0])
+    }
+  }
+
+  return null
+}
+
+function resolveLinuxUserAvatar() {
+  const homeDir = os.homedir()
+  const candidates = [
+    path.join(homeDir, '.face'),
+    path.join(homeDir, '.face.icon'),
+  ]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return fileToDataUrl(candidate)
+    }
+  }
+
+  return null
+}
+
+async function getUserAvatar() {
+  switch (process.platform) {
+    case 'win32':
+      return resolveWindowsUserAvatar()
+    case 'darwin':
+      return resolveMacUserAvatar()
+    default:
+      return resolveLinuxUserAvatar()
+  }
+}
+
 async function getWindowsApps() {
   const locations = [
     path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
@@ -564,6 +654,7 @@ export async function getDeviceInfo() {
       uptimeHours: (os.uptime() / 3600).toFixed(1),
       homeDir: os.homedir(),
       userName: os.userInfo().username,
+      userAvatar: await getUserAvatar(),
       volumes: await getVolumes(),
     }
   })

@@ -110,6 +110,7 @@ type DeviceInfo = {
   uptimeHours: string
   homeDir: string
   userName: string
+  userAvatar: string | null
   volumes: Array<{ name: string; mount: string; totalGb: string; freeGb: string; kind: 'internal' | 'external' }>
 }
 
@@ -249,10 +250,12 @@ type NoteItem = {
 
 type DesktopItem = {
   id: string
-  kind: 'folder' | 'text'
+  kind: 'folder' | 'text' | 'file'
   name: string
   parentId: string | null
   content: string
+  sourcePath: string | null
+  extension: string
   x: number
   y: number
   updatedAt: number
@@ -265,6 +268,17 @@ type DesktopItemDragState = {
   offsetY: number
   moved: boolean
 }
+
+type DesktopTrashDragState = {
+  offsetX: number
+  offsetY: number
+  moved: boolean
+}
+
+type DesktopClipboardState =
+  | { type: 'desktop-item'; itemId: string }
+  | { type: 'volume-entry'; entry: VolumeEntry }
+  | null
 
 const MENU_BAR_HEIGHT = 30
 const DOCK_BOTTOM = 0
@@ -283,6 +297,7 @@ const APPEARANCE_MODE_STORAGE_KEY = 'mactorno-appearance-mode'
 const WALLPAPER_STORAGE_KEY = 'mactorno-wallpaper-id'
 const NOTES_STORAGE_KEY = 'mactorno-notes'
 const DESKTOP_ITEMS_STORAGE_KEY = 'mactorno-desktop-items'
+const DESKTOP_TRASH_POSITION_STORAGE_KEY = 'mactorno-desktop-trash-position'
 const SYSTEM_CONTROLS_DEBOUNCE_MS = 120
 const DEFAULT_DOCK_ITEMS: AppId[] = ['finder', 'launcher', 'notes', 'safari', 'photos', 'videos', 'calculator', 'docksettings', 'terminal']
 const SAFARI_HOME_URL = 'mactorno://home'
@@ -485,6 +500,22 @@ function formatVolumeSize(sizeBytes: number | null) {
   return `${value >= 100 ? Math.round(value) : value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`
 }
 
+function serializeVolumeEntryPayload(entry: VolumeEntry) {
+  return JSON.stringify(entry)
+}
+
+function parseVolumeEntryPayload(payload: string) {
+  try {
+    const parsed = JSON.parse(payload) as VolumeEntry
+    if (!parsed?.path || !parsed?.name || !parsed?.kind) {
+      return null
+    }
+    return parsed
+  } catch {
+    return null
+  }
+}
+
 function isImageEntry(entry: VolumeEntry) {
   return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'].includes(entry.extension.toLowerCase())
 }
@@ -558,11 +589,26 @@ function loadDesktopItems() {
     return Array.isArray(parsed)
       ? parsed.map((item) => ({
           ...item,
+          sourcePath: typeof item.sourcePath === 'string' ? item.sourcePath : null,
+          extension: typeof item.extension === 'string' ? item.extension : '',
           trashedAt: typeof item.trashedAt === 'number' ? item.trashedAt : null,
         }))
       : []
   } catch {
     return []
+  }
+}
+
+function loadDesktopTrashPosition() {
+  if (typeof window === 'undefined') {
+    return null as { x: number; y: number } | null
+  }
+
+  try {
+    const raw = window.localStorage.getItem(DESKTOP_TRASH_POSITION_STORAGE_KEY)
+    return raw ? JSON.parse(raw) as { x: number; y: number } : null
+  } catch {
+    return null
   }
 }
 
@@ -1092,6 +1138,7 @@ function PhotoViewer({ src, alt, zoom = 1, rotation = 0 }: { src: string; alt: s
 
 function App() {
   const [loggedIn, setLoggedIn] = useState(false)
+  const [loginTransitioning, setLoginTransitioning] = useState(false)
   const [clock, setClock] = useState(() => formatTime(new Date()))
   const [windows, setWindows] = useState<WindowState[]>([])
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -1118,6 +1165,8 @@ function App() {
   const [wallpaperId, setWallpaperId] = useState(() => loadWallpaperId())
   const [notes, setNotes] = useState<NoteItem[]>(() => loadNotes())
   const [desktopItems, setDesktopItems] = useState<DesktopItem[]>(() => loadDesktopItems())
+  const [desktopTrashPosition, setDesktopTrashPosition] = useState<{ x: number; y: number } | null>(() => loadDesktopTrashPosition())
+  const [desktopClipboard, setDesktopClipboard] = useState<DesktopClipboardState>(null)
   const [editingDesktopItemId, setEditingDesktopItemId] = useState<string | null>(null)
   const [editingDesktopItemName, setEditingDesktopItemName] = useState('')
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
@@ -1152,6 +1201,8 @@ function App() {
   const skipDesktopVolumeClickRef = useRef<string | null>(null)
   const desktopItemDragRef = useRef<DesktopItemDragState | null>(null)
   const skipDesktopItemClickRef = useRef<string | null>(null)
+  const desktopTrashDragRef = useRef<DesktopTrashDragState | null>(null)
+  const skipDesktopTrashClickRef = useRef(false)
   const pendingSystemControlsPatchRef = useRef<SystemControlPatch>({})
   const systemControlsFlushTimerRef = useRef<number | null>(null)
   const pendingDockMouseX = useRef<number | null>(null)
@@ -1239,6 +1290,20 @@ function App() {
     return {
       x: clamp(desktop.x + leftInset + column * columnWidth, desktop.x, maxX),
       y: clamp(desktop.y + topInset + row * itemHeight, desktop.y, maxY),
+    }
+  }
+
+  function getDesktopTrashPosition() {
+    if (desktopTrashPosition) {
+      return {
+        left: desktopTrashPosition.x,
+        top: desktopTrashPosition.y,
+      }
+    }
+
+    return {
+      left: Math.max(DESKTOP_SIDE_MARGIN + 16, window.innerWidth - DESKTOP_SIDE_MARGIN - 84),
+      top: Math.max(MENU_BAR_HEIGHT + 24, window.innerHeight - DOCK_HEIGHT - 132),
     }
   }
 
@@ -1462,6 +1527,44 @@ function App() {
   }
 
   useEffect(() => {
+    let cancelled = false
+    async function loadIdentity() {
+      try {
+        const device = window.electronDesktop
+          ? await window.electronDesktop.getDeviceInfo() as DeviceInfo
+          : await fetch('/api/device-info').then((response) => {
+              if (!response.ok) throw new Error('No fue posible leer los datos del dispositivo')
+              return response.json() as Promise<DeviceInfo>
+            })
+
+        if (!cancelled) {
+          setDeviceInfo((current) => current ?? device)
+        }
+      } catch {
+        // Mantiene fallback local si no hay identidad disponible.
+      }
+    }
+
+    void loadIdentity()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!loginTransitioning) {
+      return undefined
+    }
+
+    const timer = window.setTimeout(() => {
+      setLoggedIn(true)
+      setLoginTransitioning(false)
+    }, 280)
+
+    return () => window.clearTimeout(timer)
+  }, [loginTransitioning])
+
+  useEffect(() => {
     const timer = window.setInterval(() => setClock(formatTime(new Date())), 30_000)
     return () => window.clearInterval(timer)
   }, [])
@@ -1514,6 +1617,12 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(DESKTOP_ITEMS_STORAGE_KEY, JSON.stringify(desktopItems))
   }, [desktopItems])
+
+  useEffect(() => {
+    if (desktopTrashPosition) {
+      window.localStorage.setItem(DESKTOP_TRASH_POSITION_STORAGE_KEY, JSON.stringify(desktopTrashPosition))
+    }
+  }, [desktopTrashPosition])
 
   useEffect(() => {
     if (!loggedIn) {
@@ -1773,11 +1882,57 @@ function App() {
       )
     }
 
-    function handlePointerUp() {
-      if (desktopItemDragRef.current?.moved) {
-        skipDesktopItemClickRef.current = desktopItemDragRef.current.id
+    function handlePointerUp(event: PointerEvent) {
+      const activeDrag = desktopItemDragRef.current
+      if (activeDrag?.moved) {
+        skipDesktopItemClickRef.current = activeDrag.id
+        const dropTarget = document.elementFromPoint(event.clientX, event.clientY) as HTMLElement | null
+        const folderTarget = dropTarget?.closest<HTMLElement>('[data-desktop-folder-id]')
+        const trashTarget = dropTarget?.closest<HTMLElement>('[data-trash-drop-target]')
+
+        if (trashTarget) {
+          moveDesktopItemToTrash(activeDrag.id)
+        } else if (folderTarget) {
+          const folderId = folderTarget.dataset.desktopFolderId
+          if (folderId) {
+            moveDesktopItemToFolder(activeDrag.id, folderId)
+          }
+        }
       }
       desktopItemDragRef.current = null
+    }
+
+    window.addEventListener('pointermove', handlePointerMove)
+    window.addEventListener('pointerup', handlePointerUp)
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove)
+      window.removeEventListener('pointerup', handlePointerUp)
+    }
+  }, [])
+
+  useEffect(() => {
+    function handlePointerMove(event: PointerEvent) {
+      const activeDrag = desktopTrashDragRef.current
+      if (!activeDrag) {
+        return
+      }
+
+      const nextX = clamp(event.clientX - activeDrag.offsetX, 12, Math.max(12, window.innerWidth - 108))
+      const nextY = clamp(event.clientY - activeDrag.offsetY, MENU_BAR_HEIGHT + 12, Math.max(MENU_BAR_HEIGHT + 12, window.innerHeight - 132))
+
+      desktopTrashDragRef.current = {
+        ...activeDrag,
+        moved: activeDrag.moved || Math.abs(event.movementX) > 0 || Math.abs(event.movementY) > 0,
+      }
+
+      setDesktopTrashPosition({ x: nextX, y: nextY })
+    }
+
+    function handlePointerUp() {
+      if (desktopTrashDragRef.current?.moved) {
+        skipDesktopTrashClickRef.current = true
+      }
+      desktopTrashDragRef.current = null
     }
 
     window.addEventListener('pointermove', handlePointerMove)
@@ -1907,6 +2062,15 @@ function App() {
       const targetPath = getVolumePathFromRoute(route)
       if (targetPath) {
         requestedTargets.add(targetPath)
+        return
+      }
+
+      const desktopFolderId = getDesktopFolderIdFromRoute(route)
+      if (desktopFolderId) {
+        const desktopFolder = desktopItems.find((item) => item.id === desktopFolderId && item.kind === 'folder' && item.sourcePath)
+        if (desktopFolder?.sourcePath) {
+          requestedTargets.add(desktopFolder.sourcePath)
+        }
       }
     })
 
@@ -1937,7 +2101,7 @@ function App() {
           setLoadingVolumeMounts((current) => ({ ...current, [targetPath]: false }))
         })
     })
-  }, [loadingVolumeMounts, volumeEntriesByMount, windows])
+  }, [desktopItems, loadingVolumeMounts, volumeEntriesByMount, windows])
 
   useEffect(() => {
     windows.forEach((item) => {
@@ -2340,6 +2504,8 @@ function App() {
       name: nextName,
       parentId,
       content: kind === 'text' ? '' : '',
+      sourcePath: null,
+      extension: '',
       x: nextPosition.x,
       y: nextPosition.y,
       updatedAt: Date.now(),
@@ -2470,6 +2636,185 @@ function App() {
     )
   }
 
+  function isDesktopItemDescendant(itemId: string, potentialAncestorId: string) {
+    let current = desktopItems.find((item) => item.id === itemId) ?? null
+    while (current?.parentId) {
+      if (current.parentId === potentialAncestorId) {
+        return true
+      }
+      current = desktopItems.find((item) => item.id === current!.parentId) ?? null
+    }
+    return false
+  }
+
+  function moveDesktopItemToFolder(itemId: string, folderId: string) {
+    if (itemId === folderId || isDesktopItemDescendant(folderId, itemId)) {
+      return
+    }
+
+    setDesktopItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? { ...item, parentId: folderId, trashedAt: null, updatedAt: Date.now() }
+          : item,
+      ),
+    )
+  }
+
+  function moveDesktopItemToTrash(itemId: string) {
+    deleteDesktopItem(itemId)
+  }
+
+  function importVolumeEntryToDesktop(entry: VolumeEntry, destinationParentId: string | null, position?: { x: number; y: number }) {
+    const fallbackPosition = getNextDesktopItemPosition(rootDesktopItems.length)
+    const desktop = getDesktopBounds()
+    const nextPosition = position
+      ? {
+          x: clamp(position.x, desktop.x, desktop.x + desktop.width - 88),
+          y: clamp(position.y, desktop.y, desktop.y + desktop.height - 92),
+        }
+      : fallbackPosition
+
+    const nextItem: DesktopItem = {
+      id: `desktop-item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      kind: entry.kind === 'directory' ? 'folder' : 'file',
+      name: entry.name,
+      parentId: destinationParentId,
+      content: '',
+      sourcePath: entry.path,
+      extension: entry.extension,
+      x: nextPosition.x,
+      y: nextPosition.y,
+      updatedAt: Date.now(),
+      trashedAt: null,
+    }
+
+    setDesktopItems((current) => [...current, nextItem])
+  }
+
+  function openDesktopFileItem(itemId: string) {
+    if (skipDesktopItemClickRef.current === itemId) {
+      skipDesktopItemClickRef.current = null
+      return
+    }
+
+    const target = desktopItems.find((item) => item.id === itemId && item.kind === 'file' && item.sourcePath)
+    if (!target?.sourcePath) {
+      return
+    }
+
+    const entry: VolumeEntry = {
+      name: target.name,
+      path: target.sourcePath,
+      kind: 'file',
+      extension: target.extension,
+      sizeBytes: null,
+    }
+
+    if (isImageEntry(entry)) {
+      openMediaWindow('photos', entry)
+      return
+    }
+
+    if (isVideoEntry(entry)) {
+      openMediaWindow('videos', entry)
+      return
+    }
+
+    void openSystemPath(target.sourcePath)
+  }
+
+  function collectDesktopItemTree(sourceId: string) {
+    const nodes: DesktopItem[] = []
+    const visit = (itemId: string) => {
+      const item = desktopItems.find((entry) => entry.id === itemId)
+      if (!item) {
+        return
+      }
+      nodes.push(item)
+      desktopItems
+        .filter((entry) => entry.parentId === itemId && entry.trashedAt === null)
+        .forEach((child) => visit(child.id))
+    }
+    visit(sourceId)
+    return nodes
+  }
+
+  function cloneDesktopItemTree(sourceId: string, destinationParentId: string | null, position?: { x: number; y: number }) {
+    const sourceRoot = desktopItems.find((item) => item.id === sourceId && item.trashedAt === null)
+    if (!sourceRoot) {
+      return
+    }
+
+    const tree = collectDesktopItemTree(sourceId)
+    if (tree.length === 0) {
+      return
+    }
+
+    const idMap = new Map<string, string>()
+    const pastedRootName = getNextDesktopItemName(sourceRoot.kind, destinationParentId)
+    const fallbackPosition = getNextDesktopItemPosition(rootDesktopItems.length)
+    const desktop = getDesktopBounds()
+    const nextPosition = position
+      ? {
+          x: clamp(position.x, desktop.x, desktop.x + desktop.width - 88),
+          y: clamp(position.y, desktop.y, desktop.y + desktop.height - 92),
+        }
+      : fallbackPosition
+
+    const clones = tree.map((item) => {
+      const nextId = `desktop-item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+      idMap.set(item.id, nextId)
+      return {
+        ...item,
+        id: nextId,
+        name: item.id === sourceRoot.id ? pastedRootName : item.name,
+        parentId: item.id === sourceRoot.id
+          ? destinationParentId
+          : (item.parentId ? idMap.get(item.parentId) ?? item.parentId : null),
+        x: item.id === sourceRoot.id ? nextPosition.x : item.x,
+        y: item.id === sourceRoot.id ? nextPosition.y : item.y,
+        updatedAt: Date.now(),
+        trashedAt: null,
+      }
+    })
+
+    setDesktopItems((current) => [...current, ...clones])
+  }
+
+  function copyDesktopItem(itemId: string) {
+    const item = desktopItems.find((entry) => entry.id === itemId && entry.trashedAt === null)
+    if (!item) {
+      return
+    }
+    setDesktopClipboard({ type: 'desktop-item', itemId })
+    setContextMenu(null)
+  }
+
+  function copyVolumeEntry(entry: VolumeEntry) {
+    setDesktopClipboard({ type: 'volume-entry', entry })
+    setContextMenu(null)
+  }
+
+  function duplicateDesktopItem(itemId: string) {
+    cloneDesktopItemTree(itemId, null)
+    setContextMenu(null)
+  }
+
+  function pasteDesktopClipboard(position?: { x: number; y: number }, parentId: string | null = null) {
+    if (!desktopClipboard) {
+      setContextMenu(null)
+      return
+    }
+
+    if (desktopClipboard.type === 'desktop-item') {
+      cloneDesktopItemTree(desktopClipboard.itemId, parentId, position)
+    } else {
+      importVolumeEntryToDesktop(desktopClipboard.entry, parentId, position)
+    }
+    setContextMenu(null)
+  }
+
   function permanentlyDeleteDesktopItem(itemId: string) {
     const descendants = new Set<string>([itemId])
     let changed = true
@@ -2560,6 +2905,19 @@ function App() {
     }
   }
 
+  function startDesktopTrashDrag(event: React.PointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) {
+      return
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    desktopTrashDragRef.current = {
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      moved: false,
+    }
+  }
+
   function sortDesktopRootItems() {
     const sortedRootItems = [...rootDesktopItems].sort((left, right) => {
       if (left.kind !== right.kind) {
@@ -2585,7 +2943,12 @@ function App() {
 
   function getNextDesktopItemName(kind: DesktopItem['kind'], parentId: string | null) {
     const siblings = desktopItems.filter((item) => item.parentId === parentId && item.kind === kind && item.trashedAt === null)
-    const baseName = kind === 'folder' ? 'Nueva carpeta' : 'Nuevo documento de texto'
+    const baseName =
+      kind === 'folder'
+        ? 'Nueva carpeta'
+        : kind === 'text'
+          ? 'Nuevo documento de texto'
+          : 'Archivo importado'
     const existingNames = new Set(siblings.map((item) => item.name.trim().toLowerCase()))
 
     if (!existingNames.has(baseName.toLowerCase())) {
@@ -3550,12 +3913,21 @@ function App() {
     const activeTab = getActiveFinderTab(finderState)
     const activeRoute = getActiveFinderRoute(finderState)
     const activeDesktopFolderId = getDesktopFolderIdFromRoute(activeRoute)
+    const activeDesktopFolder = activeDesktopFolderId
+      ? desktopItems.find((item) => item.id === activeDesktopFolderId && item.kind === 'folder') ?? null
+      : null
     const activeDesktopItems =
       activeRoute === 'desktop' || activeDesktopFolderId
-        ? desktopItems.filter((item) => item.parentId === (activeDesktopFolderId ?? null) && item.trashedAt === null)
+        ? activeDesktopFolder?.sourcePath
+          ? []
+          : desktopItems.filter((item) => item.parentId === (activeDesktopFolderId ?? null) && item.trashedAt === null)
         : []
     const activeDesktopFolders = activeDesktopItems.filter((item) => item.kind === 'folder')
-    const activeDesktopFiles = activeDesktopItems.filter((item) => item.kind === 'text')
+    const activeDesktopFiles = activeDesktopItems.filter((item) => item.kind !== 'folder')
+    const activeImportedEntries = activeDesktopFolder?.sourcePath ? volumeEntriesByMount[activeDesktopFolder.sourcePath] ?? [] : []
+    const activeImportedFolders = activeImportedEntries.filter((entry) => entry.kind === 'directory')
+    const activeImportedFiles = activeImportedEntries.filter((entry) => entry.kind !== 'directory')
+    const activeImportedLoading = activeDesktopFolder?.sourcePath ? !!loadingVolumeMounts[activeDesktopFolder.sourcePath] : false
     const activeVolumeMount = getVolumeMountFromRoute(activeRoute)
     const activeVolumePath = getVolumePathFromRoute(activeRoute)
     const activeVolume = activeVolumeMount
@@ -3671,8 +4043,9 @@ function App() {
             {activeRoute === 'desktop' || activeDesktopFolderId ? (
               <div className="device-panel">
                 <h2>{getFinderRouteLabel(activeRoute)}</h2>
-                <p>{activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : 'Contenido de la carpeta virtual.'}</p>
-                {activeDesktopItems.length === 0 ? <p>Esta ubicacion aun no tiene elementos.</p> : null}
+                <p>{activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : activeDesktopFolder?.sourcePath ? activeDesktopFolder.sourcePath : 'Contenido de la carpeta virtual.'}</p>
+                {!activeImportedLoading && activeDesktopItems.length === 0 && activeImportedEntries.length === 0 ? <p>Esta ubicacion aun no tiene elementos.</p> : null}
+                {activeImportedLoading ? <p>Cargando contenido importado...</p> : null}
                 {activeDesktopFolders.length ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas</strong>
@@ -3700,10 +4073,68 @@ function App() {
                           key={item.id}
                           type="button"
                           className="finder-file-row interactive"
-                          onClick={() => openDesktopDocument(item.id)}
+                          onClick={() => {
+                            if (item.kind === 'text') {
+                              openDesktopDocument(item.id)
+                            } else {
+                              openDesktopFileItem(item.id)
+                            }
+                          }}
                         >
                           <strong>{item.name}</strong>
-                          <span>Documento de texto</span>
+                          <span>{item.kind === 'text' ? 'Documento de texto' : item.extension || 'Archivo importado'}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeImportedFolders.length ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Carpetas importadas</strong>
+                    <div className="finder-folder-grid">
+                      {activeImportedFolders.map((entry) => (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          className="finder-folder-tile"
+                          onClick={() => {
+                            importVolumeEntryToDesktop(entry, activeDesktopFolderId ?? null)
+                          }}
+                        >
+                          <span className="finder-folder-icon" aria-hidden="true" />
+                          <strong>{entry.name}</strong>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeImportedFiles.length ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Archivos importados</strong>
+                    <div className="finder-file-list">
+                      {activeImportedFiles.map((entry) => (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          className="finder-file-row interactive"
+                          onClick={() => void (async () => {
+                            if (isImageEntry(entry)) {
+                              openMediaWindow('photos', entry)
+                              return
+                            }
+                            if (isVideoEntry(entry)) {
+                              openMediaWindow('videos', entry)
+                              return
+                            }
+                            await openSystemPath(entry.path)
+                          })()}
+                          onContextMenu={(event) => {
+                            event.preventDefault()
+                            copyVolumeEntry(entry)
+                          }}
+                        >
+                          <strong>{entry.name}</strong>
+                          <span>{formatVolumeSize(entry.sizeBytes)}</span>
                         </button>
                       ))}
                     </div>
@@ -3912,6 +4343,15 @@ function App() {
                           type="button"
                           className="finder-folder-tile"
                           onClick={() => navigateFinder(windowItem.id, createVolumeSubRoute(activeVolumeMount, entry.path))}
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
+                            event.dataTransfer.effectAllowed = 'copy'
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault()
+                            copyVolumeEntry(entry)
+                          }}
                         >
                           <span className="finder-folder-icon" aria-hidden="true" />
                           <strong>{entry.name}</strong>
@@ -3929,6 +4369,11 @@ function App() {
                           key={entry.path}
                           type="button"
                           className="finder-file-row interactive"
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
+                            event.dataTransfer.effectAllowed = 'copy'
+                          }}
                           onClick={() => void (async () => {
                             if (isImageEntry(entry)) {
                               openMediaWindow('photos', entry)
@@ -3940,6 +4385,10 @@ function App() {
                             }
                             await openSystemPath(entry.path)
                           })()}
+                          onContextMenu={(event) => {
+                            event.preventDefault()
+                            copyVolumeEntry(entry)
+                          }}
                         >
                           <strong>{entry.name}</strong>
                           <span>{formatVolumeSize(entry.sizeBytes)}</span>
@@ -4697,15 +5146,28 @@ function App() {
 
   if (!loggedIn) {
     return (
-      <main className="login-screen">
-        <div className="login-panel">
-          <div className="avatar-shell">ME</div>
-          <p className="welcome-tag">Mini macOS local</p>
-          <h1>Mactorno</h1>
+      <main className={`login-screen${loginTransitioning ? ' exiting' : ''}`}>
+        <div className={`login-panel${loginTransitioning ? ' exiting' : ''}`}>
+          <div className="avatar-shell">
+            {deviceInfo?.userAvatar ? (
+              <img className="login-avatar-image" src={deviceInfo.userAvatar} alt={deviceInfo.userName} />
+            ) : (
+              <span>{(deviceInfo?.userName?.trim()[0] || 'M').toUpperCase()}</span>
+            )}
+          </div>
+          <p className="welcome-tag">Mactorno</p>
+          <h1>{deviceInfo?.userName ?? 'Usuario local'}</h1>
           <p className="welcome-copy">
-            Pantalla de acceso inspirada en macOS. Sin clave: entra directo al escritorio.
+            {deviceInfo
+              ? `Sesion de ${deviceInfo.osName}. Haz clic para entrar al escritorio.`
+              : 'Pantalla de acceso inspirada en macOS. Haz clic para entrar al escritorio.'}
           </p>
-          <button type="button" onClick={() => setLoggedIn(true)}>
+          <button
+            type="button"
+            className="login-enter-button"
+            onClick={() => setLoginTransitioning(true)}
+            disabled={loginTransitioning}
+          >
             Ingresar
           </button>
         </div>
@@ -4790,6 +5252,20 @@ function App() {
 
       <section
         className="desktop-canvas"
+        onDragOver={(event) => {
+          if (parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))) {
+            event.preventDefault()
+            event.dataTransfer.dropEffect = 'copy'
+          }
+        }}
+        onDrop={(event) => {
+          const entry = parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))
+          if (!entry) {
+            return
+          }
+          event.preventDefault()
+          importVolumeEntryToDesktop(entry, null, { x: event.clientX, y: event.clientY })
+        }}
         onContextMenu={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.app-window, .desktop-volume-icon, .desktop-item-icon, .context-menu, .dock-wrap')) {
@@ -4810,11 +5286,14 @@ function App() {
         <button
           type="button"
           className="desktop-trash-icon"
-          style={{
-            left: Math.max(DESKTOP_SIDE_MARGIN + 16, window.innerWidth - DESKTOP_SIDE_MARGIN - 84),
-            top: Math.max(MENU_BAR_HEIGHT + 24, window.innerHeight - DOCK_HEIGHT - 132),
-          }}
+          data-trash-drop-target="true"
+          style={getDesktopTrashPosition()}
+          onPointerDown={startDesktopTrashDrag}
           onClick={(event) => {
+            if (skipDesktopTrashClickRef.current) {
+              skipDesktopTrashClickRef.current = false
+              return
+            }
             if (event.detail < 2) {
               return
             }
@@ -4836,6 +5315,7 @@ function App() {
             key={item.id}
             type="button"
             className="desktop-item-icon"
+            data-desktop-folder-id={item.kind === 'folder' ? item.id : undefined}
             style={{ left: item.x, top: item.y }}
             onPointerDown={(event) => startDesktopItemDrag(event, item.id)}
             onClick={(event) => {
@@ -4847,8 +5327,10 @@ function App() {
               }
               if (item.kind === 'folder') {
                 openDesktopFolder(item.id)
-              } else {
+              } else if (item.kind === 'text') {
                 openDesktopDocument(item.id)
+              } else {
+                openDesktopFileItem(item.id)
               }
             }}
             onContextMenu={(event) => {
@@ -4860,6 +5342,24 @@ function App() {
                 label: item.name,
                 kind: item.kind,
               }, event.clientX, event.clientY)
+            }}
+            onDragOver={(event) => {
+              if (item.kind === 'folder' && parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))) {
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'copy'
+              }
+            }}
+            onDrop={(event) => {
+              if (item.kind !== 'folder') {
+                return
+              }
+              const entry = parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))
+              if (!entry) {
+                return
+              }
+              event.preventDefault()
+              event.stopPropagation()
+              importVolumeEntryToDesktop(entry, item.id)
             }}
           >
             {item.kind === 'folder' ? (
@@ -4890,7 +5390,7 @@ function App() {
             ) : (
               <strong>{item.name}</strong>
             )}
-            <span>{item.kind === 'folder' ? 'Carpeta' : 'Documento'}</span>
+            <span>{item.kind === 'folder' ? 'Carpeta' : item.kind === 'text' ? 'Documento' : item.extension || 'Archivo'}</span>
           </button>
         ))}
 
@@ -5046,6 +5546,14 @@ function App() {
           >
             Cambiar fondo
           </button>
+          {desktopClipboard ? (
+            <button
+              type="button"
+              onClick={() => pasteDesktopClipboard({ x: contextMenu.desktopX, y: contextMenu.desktopY })}
+            >
+              Pegar
+            </button>
+          ) : null}
           <button type="button" onClick={sortDesktopRootItems}>
             Ordenar iconos
           </button>
@@ -5078,6 +5586,17 @@ function App() {
           <button type="button" onClick={() => renameDesktopItem(contextMenu.itemId)}>
             Renombrar
           </button>
+          <button type="button" onClick={() => copyDesktopItem(contextMenu.itemId)}>
+            Copiar
+          </button>
+          <button type="button" onClick={() => duplicateDesktopItem(contextMenu.itemId)}>
+            Duplicar
+          </button>
+          {contextMenu.kind === 'folder' && desktopClipboard ? (
+            <button type="button" onClick={() => pasteDesktopClipboard(undefined, contextMenu.itemId)}>
+              Pegar dentro
+            </button>
+          ) : null}
           <button type="button" onClick={() => deleteDesktopItem(contextMenu.itemId)}>
             Mover a papelera
           </button>
