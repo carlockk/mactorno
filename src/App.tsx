@@ -35,9 +35,12 @@ type FinderTab = {
   historyIndex: number
 }
 
+type FinderViewMode = 'icons' | 'list'
+
 type FinderState = {
   tabs: FinderTab[]
   activeTabId: string
+  viewMode: FinderViewMode
 }
 
 type BrowserState = {
@@ -122,6 +125,7 @@ type VolumeEntry = {
   kind: 'directory' | 'file'
   extension: string
   sizeBytes: number | null
+  icon?: string | null
 }
 
 type InstalledApp = {
@@ -302,6 +306,7 @@ type DesktopItem = {
   content: string
   sourcePath: string | null
   extension: string
+  iconDataUrl: string | null
   x: number
   y: number
   updatedAt: number
@@ -588,6 +593,22 @@ function formatTime(date: Date) {
   }).format(date)
 }
 
+function formatLoginDate(date: Date) {
+  return new Intl.DateTimeFormat('es-CL', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date)
+}
+
+function formatLoginTime(date: Date) {
+  return new Intl.DateTimeFormat('es-CL', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(date)
+}
+
 function getApp(appId: AppId) {
   const app = APPS.find((item) => item.id === appId)
   if (!app) {
@@ -637,6 +658,7 @@ function loadDesktopItems() {
           ...item,
           sourcePath: typeof item.sourcePath === 'string' ? item.sourcePath : null,
           extension: typeof item.extension === 'string' ? item.extension : '',
+          iconDataUrl: typeof item.iconDataUrl === 'string' ? item.iconDataUrl : null,
           trashedAt: typeof item.trashedAt === 'number' ? item.trashedAt : null,
         }))
       : []
@@ -737,7 +759,7 @@ function createTerminalState(cwd: string): TerminalState {
 
 function createFinderState(route: FinderRoute): FinderState {
   const tab = createFinderTab(route, 1)
-  return { tabs: [tab], activeTabId: tab.id }
+  return { tabs: [tab], activeTabId: tab.id, viewMode: 'icons' }
 }
 
 function normalizeBrowserUrl(value: string) {
@@ -1105,7 +1127,7 @@ function VideoPlayer({
           className="media-video"
           src={src}
           controls
-          preload="metadata"
+          preload="auto"
           ref={videoRef}
           onPlay={onPlaybackStateChange}
           onPause={onPlaybackStateChange}
@@ -1185,7 +1207,14 @@ function PhotoViewer({ src, alt, zoom = 1, rotation = 0 }: { src: string; alt: s
 function App() {
   const [loggedIn, setLoggedIn] = useState(false)
   const [loginTransitioning, setLoginTransitioning] = useState(false)
-  const [clock, setClock] = useState(() => formatTime(new Date()))
+  const [clock, setClock] = useState(() => {
+    const now = new Date()
+    return {
+      menu: formatTime(now),
+      loginDate: formatLoginDate(now),
+      loginTime: formatLoginTime(now),
+    }
+  })
   const [windows, setWindows] = useState<WindowState[]>([])
   const [drag, setDrag] = useState<DragState | null>(null)
   const [resize, setResize] = useState<ResizeState | null>(null)
@@ -1611,7 +1640,14 @@ function App() {
   }, [loginTransitioning])
 
   useEffect(() => {
-    const timer = window.setInterval(() => setClock(formatTime(new Date())), 30_000)
+    const timer = window.setInterval(() => {
+      const now = new Date()
+      setClock({
+        menu: formatTime(now),
+        loginDate: formatLoginDate(now),
+        loginTime: formatLoginTime(now),
+      })
+    }, 30_000)
     return () => window.clearInterval(timer)
   }, [])
 
@@ -2671,6 +2707,7 @@ function App() {
       content: kind === 'text' ? '' : '',
       sourcePath: null,
       extension: '',
+      iconDataUrl: null,
       x: nextPosition.x,
       y: nextPosition.y,
       updatedAt: Date.now(),
@@ -2848,6 +2885,7 @@ function App() {
       content: '',
       sourcePath: entry.path,
       extension: entry.extension,
+      iconDataUrl: entry.icon ?? null,
       x: nextPosition.x,
       y: nextPosition.y,
       updatedAt: Date.now(),
@@ -2874,6 +2912,7 @@ function App() {
       kind: 'file',
       extension: target.extension,
       sizeBytes: null,
+      icon: target.iconDataUrl,
     }
 
     if (isImageEntry(entry)) {
@@ -3298,6 +3337,10 @@ function App() {
     )
   }
 
+  function updateFinderViewMode(windowId: string, viewMode: FinderViewMode) {
+    updateFinderWindow(windowId, (finderState) => ({ ...finderState, viewMode }))
+  }
+
   function navigateFinder(windowId: string, route: FinderRoute) {
     updateFinderWindow(windowId, (finderState) => ({
       ...finderState,
@@ -3315,7 +3358,7 @@ function App() {
   function openFinderTab(windowId: string, route: FinderRoute) {
     updateFinderWindow(windowId, (finderState) => {
       const nextTab = createFinderTab(route, finderState.tabs.length + 1)
-      return { tabs: [...finderState.tabs, nextTab], activeTabId: nextTab.id }
+      return { ...finderState, tabs: [...finderState.tabs, nextTab], activeTabId: nextTab.id }
     })
     setContextMenu(null)
   }
@@ -4059,6 +4102,62 @@ function App() {
     )
   }
 
+  function renderFinderFileTile(options: {
+    keyId: string
+    name: string
+    subtitle: string
+    sourcePath?: string | null
+    extension?: string
+    iconSrc?: string | null
+    onClick: () => void
+    onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void
+    draggable?: boolean
+    onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
+  }) {
+    const { keyId, name, subtitle, sourcePath, extension = '', iconSrc, onClick, onContextMenu, draggable, onDragStart } = options
+    const isImage = !!sourcePath && isImageEntry({ name, path: sourcePath, kind: 'file', extension, sizeBytes: null })
+    const isVideo = !!sourcePath && isVideoEntry({ name, path: sourcePath, kind: 'file', extension, sizeBytes: null })
+
+    return (
+      <button
+        key={keyId}
+        type="button"
+        className="finder-file-tile"
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+        draggable={draggable}
+        onDragStart={onDragStart}
+      >
+        {isImage && sourcePath ? (
+          <img className="finder-file-thumb image" src={getMediaSource(sourcePath)} alt="" draggable={false} />
+        ) : iconSrc ? (
+          <img className="finder-file-thumb custom-icon" src={iconSrc} alt="" draggable={false} />
+        ) : isVideo && sourcePath ? (
+          <video
+            className="finder-file-thumb video"
+            src={getMediaSource(sourcePath)}
+            muted
+            playsInline
+            preload="metadata"
+            draggable={false}
+            onLoadedMetadata={(event) => {
+              const video = event.currentTarget
+              if (video.duration > 0.12) {
+                video.currentTime = 0.12
+              }
+            }}
+          />
+        ) : (
+          <span className={`finder-file-thumb${extension ? ' generic' : ''}`} aria-hidden="true">
+            {extension ? extension.replace('.', '').slice(0, 4).toUpperCase() || 'FILE' : 'DOC'}
+          </span>
+        )}
+        <strong>{name}</strong>
+        <span>{subtitle}</span>
+      </button>
+    )
+  }
+
   function renderDisplayCard(subtitle: string) {
     return (
       <button
@@ -4104,6 +4203,7 @@ function App() {
     const activeVolumeLoading = activeVolumePath ? !!loadingVolumeMounts[activeVolumePath] : false
     const canGoBack = !!activeTab && activeTab.historyIndex > 0
     const canGoForward = !!activeTab && activeTab.historyIndex < activeTab.history.length - 1
+    const viewMode = finderState?.viewMode ?? 'icons'
 
     return (
       <div className="finder-shell">
@@ -4117,9 +4217,27 @@ function App() {
             </button>
           </div>
           <strong>{getFinderRouteLabel(activeRoute)}</strong>
-          <button type="button" onClick={() => openFinderTab(windowItem.id, activeRoute)}>
-            Nueva pestana
-          </button>
+          <div className="finder-bar-actions">
+            <div className="finder-view-toggle" aria-label="Vista del Finder">
+              <button
+                type="button"
+                className={viewMode === 'icons' ? 'active' : ''}
+                onClick={() => updateFinderViewMode(windowItem.id, 'icons')}
+              >
+                Iconos
+              </button>
+              <button
+                type="button"
+                className={viewMode === 'list' ? 'active' : ''}
+                onClick={() => updateFinderViewMode(windowItem.id, 'list')}
+              >
+                Lista
+              </button>
+            </div>
+            <button type="button" onClick={() => openFinderTab(windowItem.id, activeRoute)}>
+              Nueva pestana
+            </button>
+          </div>
         </div>
 
         <div className="finder-tabs">
@@ -4230,7 +4348,7 @@ function App() {
                 <p>{activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : activeDesktopFolder?.sourcePath ? activeDesktopFolder.sourcePath : 'Contenido de la carpeta virtual.'}</p>
                 {!activeImportedLoading && activeDesktopItems.length === 0 && activeImportedEntries.length === 0 ? <p>Esta ubicacion aun no tiene elementos.</p> : null}
                 {activeImportedLoading ? <p>Cargando contenido importado...</p> : null}
-                {activeDesktopFolders.length ? (
+                {activeDesktopFolders.length && viewMode === 'icons' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas</strong>
                     <div className="finder-folder-grid">
@@ -4248,7 +4366,25 @@ function App() {
                     </div>
                   </div>
                 ) : null}
-                {activeDesktopFiles.length ? (
+                 {activeDesktopFolders.length && viewMode === 'list' ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Carpetas</strong>
+                    <div className="finder-file-list">
+                      {activeDesktopFolders.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="finder-file-row interactive"
+                          onClick={() => navigateFinder(windowItem.id, createDesktopFolderRoute(item.id))}
+                        >
+                          <strong>{item.name}</strong>
+                          <span>Carpeta</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeDesktopFiles.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Documentos</strong>
                     <div className="finder-file-list">
@@ -4272,7 +4408,31 @@ function App() {
                     </div>
                   </div>
                 ) : null}
-                {activeImportedFolders.length ? (
+                {activeDesktopFiles.length && viewMode === 'icons' ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Documentos</strong>
+                    <div className="finder-file-grid">
+                      {activeDesktopFiles.map((item) =>
+                        renderFinderFileTile({
+                          keyId: item.id,
+                          name: item.name,
+                          subtitle: item.kind === 'text' ? 'Documento de texto' : item.extension || 'Archivo importado',
+                          sourcePath: item.sourcePath,
+                          extension: item.extension,
+                          iconSrc: item.iconDataUrl,
+                          onClick: () => {
+                            if (item.kind === 'text') {
+                              openDesktopDocument(item.id)
+                            } else {
+                              openDesktopFileItem(item.id)
+                            }
+                          },
+                        }),
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+                {activeImportedFolders.length && viewMode === 'icons' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas importadas</strong>
                     <div className="finder-folder-grid">
@@ -4292,7 +4452,35 @@ function App() {
                     </div>
                   </div>
                 ) : null}
-                {activeImportedFiles.length ? (
+                {activeImportedFolders.length && viewMode === 'list' ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Carpetas importadas</strong>
+                    <div className="finder-file-list">
+                      {activeImportedFolders.map((entry) => (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          className="finder-file-row interactive"
+                          onClick={() => {
+                            importVolumeEntryToDesktop(entry, activeDesktopFolderId ?? null)
+                          }}
+                          onContextMenu={(event) => {
+                            event.preventDefault()
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
+                          }}
+                        >
+                          <strong>{entry.name}</strong>
+                          <span>Carpeta importada</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeImportedFiles.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Archivos importados</strong>
                     <div className="finder-file-list">
@@ -4325,6 +4513,44 @@ function App() {
                           <span>{formatVolumeSize(entry.sizeBytes)}</span>
                         </button>
                       ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeImportedFiles.length && viewMode === 'icons' ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Archivos importados</strong>
+                    <div className="finder-file-grid">
+                      {activeImportedFiles.map((entry) =>
+                        renderFinderFileTile({
+                          keyId: entry.path,
+                          name: entry.name,
+                          subtitle: formatVolumeSize(entry.sizeBytes),
+                          sourcePath: entry.path,
+                          extension: entry.extension,
+                          iconSrc: entry.icon,
+                          onClick: () => {
+                            void (async () => {
+                              if (isImageEntry(entry)) {
+                                openMediaWindow('photos', entry)
+                                return
+                              }
+                              if (isVideoEntry(entry)) {
+                                openMediaWindow('videos', entry)
+                                return
+                              }
+                              await openSystemPath(entry.path)
+                            })()
+                          },
+                          onContextMenu: (event) => {
+                            event.preventDefault()
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
+                          },
+                        }),
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -4521,7 +4747,7 @@ function App() {
                 {!activeVolumeLoading && activeVolumeEntries.length === 0 ? (
                   <p>No se encontraron elementos visibles en esta unidad.</p>
                 ) : null}
-                {activeVolumeFolders.length ? (
+                {activeVolumeFolders.length && viewMode === 'icons' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Carpetas</strong>
                     <div className="finder-folder-grid">
@@ -4552,7 +4778,38 @@ function App() {
                     </div>
                   </div>
                 ) : null}
-                {activeVolumeFiles.length ? (
+                {activeVolumeFolders.length && viewMode === 'list' ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Carpetas</strong>
+                    <div className="finder-file-list">
+                      {activeVolumeFolders.map((entry) => (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          className="finder-file-row interactive"
+                          draggable
+                          onDragStart={(event) => {
+                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
+                            event.dataTransfer.effectAllowed = 'copy'
+                          }}
+                          onClick={() => navigateFinder(windowItem.id, createVolumeSubRoute(activeVolumeMount, entry.path))}
+                          onContextMenu={(event) => {
+                            event.preventDefault()
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
+                          }}
+                        >
+                          <strong>{entry.name}</strong>
+                          <span>Carpeta</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeVolumeFiles.length && viewMode === 'list' ? (
                   <div className="finder-entry-section">
                     <strong className="finder-entry-title">Archivos</strong>
                     <div className="finder-file-list">
@@ -4590,6 +4847,49 @@ function App() {
                           <span>{formatVolumeSize(entry.sizeBytes)}</span>
                         </button>
                       ))}
+                    </div>
+                  </div>
+                ) : null}
+                {activeVolumeFiles.length && viewMode === 'icons' ? (
+                  <div className="finder-entry-section">
+                    <strong className="finder-entry-title">Archivos</strong>
+                    <div className="finder-file-grid">
+                      {activeVolumeFiles.map((entry) =>
+                        renderFinderFileTile({
+                          keyId: entry.path,
+                          name: entry.name,
+                          subtitle: formatVolumeSize(entry.sizeBytes),
+                          sourcePath: entry.path,
+                          extension: entry.extension,
+                          iconSrc: entry.icon,
+                          draggable: true,
+                          onDragStart: (event) => {
+                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
+                            event.dataTransfer.effectAllowed = 'copy'
+                          },
+                          onClick: () => {
+                            void (async () => {
+                              if (isImageEntry(entry)) {
+                                openMediaWindow('photos', entry)
+                                return
+                              }
+                              if (isVideoEntry(entry)) {
+                                openMediaWindow('videos', entry)
+                                return
+                              }
+                              await openSystemPath(entry.path)
+                            })()
+                          },
+                          onContextMenu: (event) => {
+                            event.preventDefault()
+                            openContextMenuAt({
+                              type: 'volume-entry',
+                              label: entry.name,
+                              entry,
+                            }, event.clientX, event.clientY)
+                          },
+                        }),
+                      )}
                     </div>
                   </div>
                 ) : null}
@@ -5343,6 +5643,10 @@ function App() {
   if (!loggedIn) {
     return (
       <main className={`login-screen${loginTransitioning ? ' exiting' : ''}`}>
+        <div className="login-clock-block" aria-hidden="true">
+          <span className="login-clock-date">{clock.loginDate}</span>
+          <strong className="login-clock-time">{clock.loginTime}</strong>
+        </div>
         <div className={`login-panel${loginTransitioning ? ' exiting' : ''}`}>
           <div className="avatar-shell">
             {deviceInfo?.userAvatar ? (
@@ -5440,7 +5744,7 @@ function App() {
             </span>
           </button>
           <span>{deviceInfo ? deviceInfo.osName : 'Localhost'}</span>
-          <span>{clock}</span>
+          <span>{clock.menu}</span>
         </div>
       </header>
 
@@ -5560,6 +5864,37 @@ function App() {
           >
             {item.kind === 'folder' ? (
               <span className="desktop-item-art folder" aria-hidden="true" />
+            ) : item.kind === 'file' && item.sourcePath && isImageEntry({
+              name: item.name,
+              path: item.sourcePath,
+              kind: 'file',
+              extension: item.extension,
+              sizeBytes: null,
+            }) ? (
+              <img className="desktop-item-art image-preview" src={getMediaSource(item.sourcePath)} alt="" draggable={false} />
+            ) : item.kind === 'file' && item.sourcePath && isVideoEntry({
+              name: item.name,
+              path: item.sourcePath,
+              kind: 'file',
+              extension: item.extension,
+              sizeBytes: null,
+            }) ? (
+              <video
+                className="desktop-item-art video-preview"
+                src={getMediaSource(item.sourcePath)}
+                muted
+                playsInline
+                preload="metadata"
+                draggable={false}
+                onLoadedMetadata={(event) => {
+                  const video = event.currentTarget
+                  if (video.duration > 0.12) {
+                    video.currentTime = 0.12
+                  }
+                }}
+              />
+            ) : item.kind === 'file' && item.iconDataUrl ? (
+              <img className="desktop-item-art custom-icon" src={item.iconDataUrl} alt="" draggable={false} />
             ) : (
               <img className="desktop-item-art text" src="/texto.png" alt="" draggable={false} />
             )}

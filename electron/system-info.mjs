@@ -84,6 +84,14 @@ function normalizeExecTarget(value) {
     .trim()
 }
 
+function shouldExtractEntryIcon(entry) {
+  if (!entry || entry.kind !== 'file') {
+    return false
+  }
+
+  return ['.exe', '.lnk', '.url'].includes(entry.extension.toLowerCase())
+}
+
 function fileToDataUrl(filePath) {
   try {
     const extension = path.extname(filePath).toLowerCase()
@@ -555,7 +563,7 @@ export async function listVolumeEntries(target) {
   }
 
   try {
-    return safeReadDir(volumePath)
+    const baseEntries = safeReadDir(volumePath)
       .map((entry) => {
         const fullPath = path.join(volumePath, entry.name)
         let sizeBytes = null
@@ -574,6 +582,7 @@ export async function listVolumeEntries(target) {
           kind: entry.isDirectory() ? 'directory' : 'file',
           extension: entry.isDirectory() ? '' : path.extname(entry.name).toLowerCase(),
           sizeBytes,
+          icon: null,
         }
       })
       .sort((left, right) => {
@@ -583,6 +592,44 @@ export async function listVolumeEntries(target) {
         return left.name.localeCompare(right.name)
       })
       .slice(0, 200)
+
+    if (process.platform !== 'win32') {
+      return baseEntries
+    }
+
+    let iconBudget = 0
+    return Promise.all(
+      baseEntries.map(async (entry) => {
+        if (!shouldExtractEntryIcon(entry) || iconBudget >= 24) {
+          return entry
+        }
+
+        iconBudget += 1
+
+        try {
+          if (entry.extension === '.lnk') {
+            const shortcut = await withTimeout(resolveWindowsShortcut(entry.path), 250)
+            const targetPath = shortcut?.TargetPath || entry.path
+            const icon = await withTimeout(extractWindowsIconData(targetPath, shortcut?.IconLocation ?? ''), 250)
+            return { ...entry, icon }
+          }
+
+          if (entry.extension === '.url') {
+            const shortcut = parseInternetShortcut(entry.path)
+            const targetPath = shortcut.url || entry.path
+            const icon = shortcut.iconFile
+              ? await withTimeout(extractWindowsIconData(targetPath, shortcut.iconFile), 250)
+              : null
+            return { ...entry, icon }
+          }
+
+          const icon = await withTimeout(extractWindowsIconData(entry.path), 250)
+          return { ...entry, icon }
+        } catch {
+          return entry
+        }
+      }),
+    )
   } catch {
     return []
   }

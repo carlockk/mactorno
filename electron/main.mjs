@@ -1,5 +1,6 @@
 import path from 'node:path'
-import { promises as fs } from 'node:fs'
+import { createReadStream, promises as fs } from 'node:fs'
+import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
 import { executeTerminalCommand, getDeviceInfo, getInstalledApps, getSystemControls, launchApp, listVolumeEntries, setSystemControls } from './system-info.mjs'
@@ -370,6 +371,11 @@ app.whenReady().then(() => {
 
       const mimeType = getMediaMimeType(targetPath)
       const rangeHeader = request.headers.get('range')
+      const baseHeaders = {
+        'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'private, max-age=3600',
+      }
 
       if (rangeHeader) {
         const match = rangeHeader.match(/bytes=(\d*)-(\d*)/)
@@ -379,35 +385,24 @@ app.whenReady().then(() => {
           const safeStart = Math.max(0, Math.min(start, stat.size - 1))
           const safeEnd = Math.max(safeStart, Math.min(end, stat.size - 1))
           const length = safeEnd - safeStart + 1
-          const fileHandle = await fs.open(targetPath, 'r')
-          const buffer = Buffer.alloc(length)
+          const stream = createReadStream(targetPath, { start: safeStart, end: safeEnd })
 
-          try {
-            await fileHandle.read(buffer, 0, length, safeStart)
-          } finally {
-            await fileHandle.close()
-          }
-
-          return new Response(buffer, {
+          return new Response(Readable.toWeb(stream), {
             status: 206,
             headers: {
-              'Content-Type': mimeType,
+              ...baseHeaders,
               'Content-Length': String(length),
               'Content-Range': `bytes ${safeStart}-${safeEnd}/${stat.size}`,
-              'Accept-Ranges': 'bytes',
-              'Cache-Control': 'no-cache',
             },
           })
         }
       }
 
-      const data = await fs.readFile(targetPath)
-      return new Response(data, {
+      const stream = createReadStream(targetPath)
+      return new Response(Readable.toWeb(stream), {
         headers: {
-          'Content-Type': mimeType,
-          'Content-Length': String(data.byteLength),
-          'Accept-Ranges': 'bytes',
-          'Cache-Control': 'no-cache',
+          ...baseHeaders,
+          'Content-Length': String(stat.size),
         },
       })
     } catch {

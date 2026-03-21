@@ -133,6 +133,14 @@ function normalizeExecTarget(value: string) {
     .trim()
 }
 
+function shouldExtractEntryIcon(entry: { kind: string; extension: string }) {
+  if (entry.kind !== 'file') {
+    return false
+  }
+
+  return ['.exe', '.lnk', '.url'].includes(entry.extension.toLowerCase())
+}
+
 function fileToDataUrl(filePath: string) {
   try {
     const extension = path.extname(filePath).toLowerCase()
@@ -556,7 +564,7 @@ async function listVolumeEntries(target: string) {
   }
 
   try {
-    return safeReadDir(volumePath)
+    const baseEntries = safeReadDir(volumePath)
       .map((entry) => {
         const fullPath = path.join(volumePath, entry.name)
         let sizeBytes: number | null = null
@@ -575,6 +583,7 @@ async function listVolumeEntries(target: string) {
           kind: entry.isDirectory() ? 'directory' : 'file',
           extension: entry.isDirectory() ? '' : path.extname(entry.name).toLowerCase(),
           sizeBytes,
+          icon: null,
         }
       })
       .sort((left, right) => {
@@ -584,6 +593,44 @@ async function listVolumeEntries(target: string) {
         return left.name.localeCompare(right.name)
       })
       .slice(0, 200)
+
+    if (process.platform !== 'win32') {
+      return baseEntries
+    }
+
+    let iconBudget = 0
+    return Promise.all(
+      baseEntries.map(async (entry) => {
+        if (!shouldExtractEntryIcon(entry) || iconBudget >= 24) {
+          return entry
+        }
+
+        iconBudget += 1
+
+        try {
+          if (entry.extension === '.lnk') {
+            const shortcut = await withTimeout(resolveWindowsShortcut(entry.path), 250)
+            const targetPath = shortcut?.TargetPath || entry.path
+            const icon = await withTimeout(extractWindowsIconData(targetPath, shortcut?.IconLocation ?? ''), 250)
+            return { ...entry, icon }
+          }
+
+          if (entry.extension === '.url') {
+            const shortcut = parseInternetShortcut(entry.path)
+            const targetPath = shortcut.url || entry.path
+            const icon = shortcut.iconFile
+              ? await withTimeout(extractWindowsIconData(targetPath, shortcut.iconFile), 250)
+              : null
+            return { ...entry, icon }
+          }
+
+          const icon = await withTimeout(extractWindowsIconData(entry.path), 250)
+          return { ...entry, icon }
+        } catch {
+          return entry
+        }
+      }),
+    )
   } catch {
     return []
   }
@@ -984,8 +1031,33 @@ function createMiddleware(): Connect.NextHandleFunction {
         return
       }
 
+      const stat = fs.statSync(target)
+      const contentType = getMediaContentType(target)
+      const rangeHeader = req.headers.range
+
+      res.setHeader('Content-Type', contentType)
+      res.setHeader('Accept-Ranges', 'bytes')
+      res.setHeader('Cache-Control', 'private, max-age=3600')
+
+      if (rangeHeader) {
+        const match = rangeHeader.match(/bytes=(\d*)-(\d*)/)
+        if (match) {
+          const start = Number(match[1] || 0)
+          const end = Number(match[2] || stat.size - 1)
+          const safeStart = Math.max(0, Math.min(start, stat.size - 1))
+          const safeEnd = Math.max(safeStart, Math.min(end, stat.size - 1))
+          const length = safeEnd - safeStart + 1
+
+          res.statusCode = 206
+          res.setHeader('Content-Length', String(length))
+          res.setHeader('Content-Range', `bytes ${safeStart}-${safeEnd}/${stat.size}`)
+          fs.createReadStream(target, { start: safeStart, end: safeEnd }).pipe(res)
+          return
+        }
+      }
+
       res.statusCode = 200
-      res.setHeader('Content-Type', getMediaContentType(target))
+      res.setHeader('Content-Length', String(stat.size))
       fs.createReadStream(target).pipe(res)
       return
     }

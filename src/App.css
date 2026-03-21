@@ -27,6 +27,38 @@ body,
   transition: opacity 280ms ease, filter 280ms ease, transform 280ms ease;
 }
 
+.login-clock-block {
+  position: absolute;
+  top: 76px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  text-align: center;
+  pointer-events: none;
+}
+
+.login-clock-date {
+  display: block;
+  margin-bottom: 10px;
+  font-size: clamp(14px, 1.5vw, 22px);
+  line-height: 1;
+  font-weight: 600;
+  color: rgba(245, 249, 255, 0.9);
+  text-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
+  text-transform: capitalize;
+}
+
+.login-clock-time {
+  display: block;
+  font-size: clamp(76px, 12vw, 138px);
+  line-height: 0.86;
+  font-weight: 400;
+  letter-spacing: -0.06em;
+  color: #f5f9ff;
+  text-shadow: 0 16px 40px rgba(0, 0, 0, 0.28);
+  margin-bottom: 56px;
+}
+
 .login-screen.exiting {
   opacity: 0;
   filter: blur(10px);
@@ -60,12 +92,12 @@ body,
 .login-panel {
   position: relative;
   width: min(440px, 100%);
-  padding: 40px 36px 34px;
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.34);
-  background: rgba(18, 24, 38, 0.3);
-  backdrop-filter: blur(28px) saturate(1.08);
-  box-shadow: 0 28px 64px rgba(0, 0, 0, 0.28);
+  padding: 96px 36px 34px;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  backdrop-filter: none;
+  box-shadow: none;
   text-align: center;
   color: #f7fbff;
   transition: opacity 240ms ease, transform 280ms ease, filter 280ms ease;
@@ -451,6 +483,23 @@ label {
   object-fit: contain;
 }
 
+.desktop-item-art.image-preview {
+  border-radius: 12px;
+  object-fit: cover;
+  box-shadow: 0 14px 24px rgba(10, 18, 42, 0.16);
+}
+
+.desktop-item-art.video-preview {
+  border-radius: 12px;
+  object-fit: cover;
+  background: #0f1117;
+  box-shadow: 0 14px 24px rgba(10, 18, 42, 0.2);
+}
+
+.desktop-item-art.custom-icon {
+  object-fit: contain;
+}
+
 .desktop-item-art.trash {
   width: 60px;
   height: 60px;
@@ -758,6 +807,37 @@ label {
   gap: 8px;
 }
 
+.finder-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.finder-view-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(226, 234, 247, 0.72);
+}
+
+.finder-view-toggle button {
+  border: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font: inherit;
+  cursor: pointer;
+  color: #445571;
+  background: transparent;
+}
+
+.finder-view-toggle button.active {
+  color: #22324d;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 6px 16px rgba(10, 18, 42, 0.08);
+}
+
 .finder-nav-group button,
 .finder-browser-bar > button {
   padding: 8px 12px;
@@ -948,10 +1028,32 @@ label {
 .desktop-shell.appearance-dark .info-grid span,
 .desktop-shell.appearance-dark .volume-list span,
 .desktop-shell.appearance-dark .finder-file-row span,
+.desktop-shell.appearance-dark .finder-file-tile span,
 .desktop-shell.appearance-dark .finder-entry-title,
 .desktop-shell.appearance-dark .display-card p,
 .desktop-shell.appearance-dark .notes-list-item span {
   color: rgba(237, 243, 255, 0.72);
+}
+
+.desktop-shell.appearance-dark .finder-view-toggle {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.desktop-shell.appearance-dark .finder-view-toggle button {
+  color: rgba(237, 243, 255, 0.72);
+}
+
+.desktop-shell.appearance-dark .finder-view-toggle button.active {
+  color: #edf3ff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.desktop-shell.appearance-dark .finder-file-thumb {
+  color: #edf3ff;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0.08));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 12px 20px rgba(3, 8, 18, 0.18);
 }
 
 .desktop-shell.appearance-dark .notes-list-item {
@@ -1175,6 +1277,76 @@ label {
 .finder-file-list {
   display: grid;
   gap: 8px;
+}
+
+.finder-file-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 16px 18px;
+}
+
+.finder-file-tile {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 10px 8px;
+}
+
+.finder-file-tile strong,
+.finder-file-tile span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.finder-file-tile strong {
+  color: #22324d;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.finder-file-tile span {
+  color: #5a6881;
+  font-size: 11px;
+}
+
+.finder-file-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  object-fit: cover;
+  color: #365077;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(228, 235, 245, 0.92));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.94),
+    0 12px 20px rgba(10, 18, 42, 0.12);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.finder-file-thumb.image {
+  padding: 0;
+}
+
+.finder-file-thumb.video {
+  padding: 0;
+  background: #0f1117;
+}
+
+.finder-file-thumb.custom-icon {
+  padding: 6px;
+  object-fit: contain;
+  background: transparent;
+  box-shadow: none;
 }
 
 .finder-file-row {
