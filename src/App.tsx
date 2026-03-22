@@ -1541,11 +1541,13 @@ function App() {
     }
     const dockIcon = dockItem.querySelector<HTMLElement>('.dock-icon')
     const rect = (dockIcon ?? dockItem).getBoundingClientRect()
-    const anchorHeight = Math.max(10, rect.height * 0.28)
+    const anchorWidth = clamp(rect.width * 0.24, 10, 14)
+    const anchorHeight = Math.max(10, rect.height * 0.22)
+    const anchorX = rect.left + rect.width / 2 - anchorWidth / 2
     return {
-      x: rect.left,
+      x: anchorX,
       y: rect.bottom - anchorHeight,
-      width: rect.width,
+      width: anchorWidth,
       height: anchorHeight,
     }
   }
@@ -2433,27 +2435,27 @@ function App() {
               const frames: Keyframe[] =
                 item.genie.mode === 'opening'
                   ? [
-                      { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 49, 3, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 0 },
-                      { transform: `translate(${deltaX * 0.9}px, ${deltaY * 0.93}px) scale(${Math.min(0.14, scaleX + 0.01)}, ${Math.min(0.3, scaleY + 0.04)})`, clipPath: createLampClipPath(anchorX, 41, 6, Math.max(3.2, narrowTip * 1.15), bias * 0.9), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.12 },
-                      { transform: `translate(${deltaX * 0.72}px, ${deltaY * 0.82}px) scale(${Math.min(0.2, scaleX + 0.02)}, ${Math.min(0.46, scaleY + 0.09)})`, clipPath: createLampClipPath(anchorX, 34, 9, mediumTip, bias * 0.72), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.89', offset: 0.26 },
-                      { transform: `translate(${deltaX * 0.5}px, ${deltaY * 0.64}px) scale(${Math.min(0.46, scaleX + 0.14)}, ${Math.min(0.68, scaleY + 0.15)})`, clipPath: createLampClipPath(anchorX, 22, 11, Math.max(10, wideTip * 0.82), bias * 0.5), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.93', offset: 0.46 },
-                      { transform: `translate(${deltaX * 0.26}px, ${deltaY * 0.36}px) scale(${Math.min(0.8, scaleX + 0.31)}, ${Math.min(0.9, scaleY + 0.19)})`, clipPath: createLampClipPath(anchorX, 12, 12, wideTip, bias * 0.26), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.68 },
-                      { transform: `translate(${deltaX * 0.08}px, ${deltaY * 0.12}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.9 },
+                      { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 50, 2.5, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 0 },
+                      { transform: `translate(${deltaX * 0.92}px, ${deltaY * 0.95}px) scale(${Math.min(0.13, scaleX + 0.01)}, ${Math.min(0.28, scaleY + 0.03)})`, clipPath: createLampClipPath(anchorX, 43, 5.5, Math.max(3, narrowTip * 1.08), bias * 0.92), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.08 },
+                      { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.min(0.18, scaleX + 0.015)}, ${Math.min(0.42, scaleY + 0.08)})`, clipPath: createLampClipPath(anchorX, 36, 8.5, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.22 },
+                      { transform: `translate(${deltaX * 0.56}px, ${deltaY * 0.68}px) scale(${Math.min(0.4, scaleX + 0.11)}, ${Math.min(0.64, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 24, 11, Math.max(10, wideTip * 0.84), bias * 0.56), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.92', offset: 0.42 },
+                      { transform: `translate(${deltaX * 0.32}px, ${deltaY * 0.42}px) scale(${Math.min(0.74, scaleX + 0.28)}, ${Math.min(0.88, scaleY + 0.18)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.32), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.68 },
+                      { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.88 },
                       { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 1 },
                     ]
                   : [
                       { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0 },
-                      { transform: `translate(${deltaX * 0.08}px, ${deltaY * 0.12}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.1 },
-                      { transform: `translate(${deltaX * 0.26}px, ${deltaY * 0.36}px) scale(${Math.max(0.56, 1 - (1 - scaleX) * 0.18)}, ${Math.max(0.76, 1 - (1 - scaleY) * 0.08)})`, clipPath: createLampClipPath(anchorX, 12, 12, wideTip, bias * 0.26), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.3 },
-                      { transform: `translate(${deltaX * 0.5}px, ${deltaY * 0.64}px) scale(${Math.max(0.34, scaleX + 0.14)}, ${Math.max(0.56, scaleY + 0.15)})`, clipPath: createLampClipPath(anchorX, 22, 11, Math.max(10, wideTip * 0.82), bias * 0.5), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.93', offset: 0.54 },
-                      { transform: `translate(${deltaX * 0.72}px, ${deltaY * 0.82}px) scale(${Math.max(0.18, scaleX + 0.02)}, ${Math.max(0.3, scaleY + 0.09)})`, clipPath: createLampClipPath(anchorX, 34, 9, mediumTip, bias * 0.72), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.89', offset: 0.76 },
-                      { transform: `translate(${deltaX * 0.9}px, ${deltaY * 0.93}px) scale(${Math.max(0.1, scaleX + 0.01)}, ${Math.max(0.18, scaleY + 0.04)})`, clipPath: createLampClipPath(anchorX, 41, 6, Math.max(3.2, narrowTip * 1.15), bias * 0.9), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.9 },
-                      { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 49, 3, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 1 },
+                      { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.08 },
+                      { transform: `translate(${deltaX * 0.32}px, ${deltaY * 0.42}px) scale(${Math.max(0.56, 1 - (1 - scaleX) * 0.18)}, ${Math.max(0.74, 1 - (1 - scaleY) * 0.08)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.32), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.24 },
+                      { transform: `translate(${deltaX * 0.56}px, ${deltaY * 0.68}px) scale(${Math.max(0.32, scaleX + 0.12)}, ${Math.max(0.54, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 24, 11, Math.max(10, wideTip * 0.84), bias * 0.56), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.92', offset: 0.46 },
+                      { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.max(0.16, scaleX + 0.02)}, ${Math.max(0.28, scaleY + 0.08)})`, clipPath: createLampClipPath(anchorX, 36, 8.5, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.7 },
+                      { transform: `translate(${deltaX * 0.92}px, ${deltaY * 0.95}px) scale(${Math.max(0.095, scaleX + 0.01)}, ${Math.max(0.16, scaleY + 0.03)})`, clipPath: createLampClipPath(anchorX, 43, 5.5, Math.max(3, narrowTip * 1.08), bias * 0.92), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.88 },
+                      { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 50, 2.5, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 1 },
                     ]
 
               return frameNode.animate(frames, {
-                duration: 820,
-                easing: 'cubic-bezier(0.2, 0.85, 0.22, 1)',
+                duration: 940,
+                easing: 'cubic-bezier(0.22, 0.78, 0.2, 1)',
                 fill: 'both',
               })
             })()
@@ -5941,34 +5943,36 @@ function App() {
               <strong>{windowItem.terminalState?.cwd ?? (deviceInfo?.homeDir ?? 'C:\\')}</strong>
               <span className="terminal-muted">{windowItem.terminalState?.busy ? 'Ejecutando...' : 'Listo'}</span>
             </div>
-            <div className="terminal-history">
-              {(windowItem.terminalState?.history ?? []).map((entry) => (
-                <div key={entry.id} className="terminal-block">
-                  <p>
-                    <span className="terminal-prompt">visitor@mactorno %</span> {entry.command}
-                  </p>
-                  {entry.output ? <pre className="terminal-output">{entry.output}</pre> : null}
-                  {entry.error ? <pre className="terminal-output terminal-error-output">{entry.error}</pre> : null}
-                </div>
-              ))}
+            <div className="terminal-body">
+              <div className="terminal-history">
+                {(windowItem.terminalState?.history ?? []).map((entry) => (
+                  <div key={entry.id} className="terminal-block">
+                    <p>
+                      <span className="terminal-prompt">visitor@mactorno %</span> {entry.command}
+                    </p>
+                    {entry.output ? <pre className="terminal-output">{entry.output}</pre> : null}
+                    {entry.error ? <pre className="terminal-output terminal-error-output">{entry.error}</pre> : null}
+                  </div>
+                ))}
+              </div>
+              <form
+                className="terminal-input-row"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void runTerminalCommand(windowItem.id)
+                }}
+              >
+                <span className="terminal-prompt">visitor@mactorno %</span>
+                <input
+                  className="terminal-input"
+                  value={windowItem.terminalState?.input ?? ''}
+                  onChange={(event) =>
+                    updateTerminalWindow(windowItem.id, (state) => ({ ...state, input: event.target.value }))
+                  }
+                  placeholder="Escribe un comando..."
+                />
+              </form>
             </div>
-            <form
-              className="terminal-input-row"
-              onSubmit={(event) => {
-                event.preventDefault()
-                void runTerminalCommand(windowItem.id)
-              }}
-            >
-              <span className="terminal-prompt">visitor@mactorno %</span>
-              <input
-                className="terminal-input"
-                value={windowItem.terminalState?.input ?? ''}
-                onChange={(event) =>
-                  updateTerminalWindow(windowItem.id, (state) => ({ ...state, input: event.target.value }))
-                }
-                placeholder="Escribe un comando..."
-              />
-            </form>
           </div>
         )
       default:

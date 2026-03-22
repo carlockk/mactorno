@@ -248,30 +248,39 @@ label {
   left: 0;
   min-width: 220px;
   display: grid;
-  gap: 4px;
-  padding: 8px;
+  gap: 2px;
+  padding: 10px;
   border-radius: 6px;
-  background: rgba(248, 251, 255, 0.58);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.26), rgba(255, 255, 255, 0.08)),
+    rgba(235, 214, 246, 0.2);
   border: 1px solid rgba(176, 189, 211, 0.28);
   backdrop-filter: blur(30px) saturate(1.12);
-  box-shadow: 0 18px 34px rgba(18, 29, 52, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 18px 34px rgba(18, 29, 52, 0.14);
   z-index: 1400;
   animation: menuFadeIn 140ms ease-out;
 }
 
 .app-menu-dropdown button {
   border: 0;
-  padding: 10px 12px;
+  padding: 11px 12px;
   text-align: left;
   font: inherit;
   color: #22324d;
   background: transparent;
   border-radius: 4px;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.app-menu-dropdown button + button {
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
 }
 
 .app-menu-dropdown button:hover {
-  background: rgba(214, 224, 240, 0.7);
+  background: rgba(92, 152, 255, 0.18);
 }
 
 .apple-mark {
@@ -342,9 +351,13 @@ label {
 
 .desktop-shell.appearance-dark .app-menu-dropdown,
 .desktop-shell.appearance-dark .context-menu {
-  background: rgba(18, 24, 36, 0.58);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+    rgba(44, 18, 54, 0.34);
   border-color: rgba(255, 255, 255, 0.08);
-  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.24);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 34px rgba(0, 0, 0, 0.24);
 }
 
 .desktop-shell.appearance-dark .app-menu-dropdown button,
@@ -354,7 +367,12 @@ label {
 
 .desktop-shell.appearance-dark .app-menu-dropdown button:hover,
 .desktop-shell.appearance-dark .context-menu button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(83, 140, 255, 0.28);
+}
+
+.desktop-shell.appearance-dark .app-menu-dropdown button + button,
+.desktop-shell.appearance-dark .context-menu button + button {
+  border-top-color: rgba(255, 255, 255, 0.08);
 }
 
 .control-center-icon {
@@ -660,10 +678,16 @@ label {
   position: absolute;
   border-radius: 8px;
   transition: box-shadow 180ms ease;
+  will-change: auto;
 }
 
 .app-window.is-genie {
   pointer-events: none;
+}
+
+.app-window.active,
+.app-window.is-genie {
+  will-change: transform;
 }
 
 .window-frame {
@@ -681,19 +705,19 @@ label {
 }
 
 .app-window.active .window-frame {
-  box-shadow: 0 30px 90px rgba(7, 12, 22, 0.38);
+  box-shadow: 0 34px 96px rgba(7, 12, 22, 0.42);
 }
 
 .app-window:not(.active) .window-frame {
   background: rgba(248, 250, 255, 0.9);
   backdrop-filter: none;
-  box-shadow: 0 18px 42px rgba(7, 12, 22, 0.18);
+  box-shadow: 0 14px 34px rgba(7, 12, 22, 0.14);
 }
 
 .desktop-shell.appearance-dark .app-window:not(.active) .window-frame {
   background: rgba(19, 24, 35, 0.94);
   backdrop-filter: none;
-  box-shadow: 0 18px 42px rgba(3, 7, 14, 0.22);
+  box-shadow: 0 14px 34px rgba(3, 7, 14, 0.18);
 }
 
 .desktop-heavy-windows .wallpaper-glow {
@@ -702,11 +726,31 @@ label {
 }
 
 .desktop-heavy-windows .app-window:not(.active) .window-frame {
-  box-shadow: 0 14px 32px rgba(7, 12, 22, 0.14);
+  background: rgba(248, 250, 255, 0.97);
+  border-color: rgba(219, 227, 238, 0.82);
+  box-shadow: 0 8px 18px rgba(7, 12, 22, 0.08);
 }
 
 .desktop-heavy-windows .app-window.active .window-frame {
-  box-shadow: 0 22px 56px rgba(7, 12, 22, 0.24);
+  box-shadow: 0 24px 58px rgba(7, 12, 22, 0.24);
+}
+
+.desktop-heavy-windows .app-window:not(.active) .window-toolbar,
+.desktop-heavy-windows .app-window:not(.active) .finder-browser-bar,
+.desktop-heavy-windows .app-window:not(.active) .finder-sidebar {
+  background: rgba(246, 249, 253, 0.96);
+}
+
+.desktop-heavy-windows.appearance-dark .app-window:not(.active) .window-frame {
+  background: rgba(19, 24, 35, 0.98);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 18px rgba(3, 7, 14, 0.14);
+}
+
+.desktop-heavy-windows.appearance-dark .app-window:not(.active) .window-toolbar,
+.desktop-heavy-windows.appearance-dark .app-window:not(.active) .finder-browser-bar,
+.desktop-heavy-windows.appearance-dark .app-window:not(.active) .finder-sidebar {
+  background: rgba(22, 28, 40, 0.96);
 }
 
 .desktop-heavy-windows .dock {
@@ -727,6 +771,7 @@ label {
 
 .app-window.maximized .window-frame {
   clip-path: inset(0 round 0);
+  box-shadow: none;
 }
 
 .app-window.maximized .window-toolbar,
@@ -2770,19 +2815,22 @@ label {
 }
 
 .terminal-view {
-  height: calc(100% - 44px);
+  height: 100%;
   box-sizing: border-box;
   font-family: Consolas, 'Courier New', monospace;
   color: #eff6ff;
-  background: rgba(9, 12, 17, 0.88);
+  background: #1b1b1d;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
 }
 
 .terminal-view p {
   margin: 0;
-  color: #dcecff;
+  color: #edf2fb;
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .terminal-prompt {
@@ -2798,18 +2846,35 @@ label {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
 }
 
-.terminal-history {
+.terminal-header strong {
+  font-size: 12px;
+  font-weight: 600;
+  color: #cdd9ec;
+}
+
+.terminal-body {
+  min-height: 0;
   overflow: auto;
   display: grid;
   align-content: start;
-  gap: 12px;
+  gap: 10px;
+  padding: 12px 14px 14px;
+}
+
+.terminal-history {
+  display: grid;
+  align-content: start;
+  gap: 10px;
 }
 
 .terminal-block {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .terminal-output {
@@ -2829,6 +2894,7 @@ label {
   grid-template-columns: auto 1fr;
   gap: 10px;
   align-items: center;
+  margin-top: 2px;
 }
 
 .terminal-input {
@@ -2842,6 +2908,12 @@ label {
 
 .terminal-input:focus {
   outline: none;
+}
+
+.app-window.app-terminal .window-content {
+  padding: 0;
+  overflow: hidden;
+  background: #1b1b1d;
 }
 
 .dock-wrap {
@@ -2969,29 +3041,38 @@ label {
   position: fixed;
   z-index: 1400;
   display: grid;
-  gap: 6px;
+  gap: 2px;
   min-width: 220px;
-  padding: 8px;
+  padding: 10px;
   border-radius: 5px;
-  background: rgba(248, 251, 255, 0.56);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0.08)),
+    rgba(236, 196, 224, 0.18);
   border: 1px solid rgba(176, 189, 211, 0.28);
   backdrop-filter: blur(32px) saturate(1.14);
-  box-shadow: 0 18px 34px rgba(18, 29, 52, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.42),
+    0 18px 34px rgba(18, 29, 52, 0.14);
   animation: menuFadeIn 140ms ease-out;
 }
 
 .context-menu button {
   border: 0;
-  padding: 10px 12px;
+  padding: 11px 12px;
   text-align: left;
   color: #22324d;
   background: transparent;
   border-radius: 4px;
   cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.context-menu button + button {
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
 }
 
 .context-menu button:hover {
-  background: rgba(214, 224, 240, 0.7);
+  background: rgba(83, 140, 255, 0.22);
 }
 
 .context-menu button:last-child {
