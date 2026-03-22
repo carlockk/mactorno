@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld('electronDesktop', {
   revealPath: (target) => ipcRenderer.invoke('path:reveal', target),
   executeTerminalCommand: (payload) => ipcRenderer.invoke('terminal:execute', payload),
   launchApp: (target) => ipcRenderer.invoke('apps:launch', target),
+  quitApp: () => ipcRenderer.invoke('window:quit'),
+  reloadApp: () => ipcRenderer.invoke('window:reload'),
   onBrowserSyncRequest: (callback) => {
     const handler = () => callback()
     ipcRenderer.on('desktop:request-browser-sync', handler)

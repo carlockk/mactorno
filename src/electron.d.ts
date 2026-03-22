@@ -19,6 +19,8 @@ type ElectronDesktopApi = {
   revealPath: (target: string) => Promise<{ ok?: boolean; error?: string | null }>
   executeTerminalCommand: (payload: { command: string; cwd: string }) => Promise<unknown>
   launchApp: (target: string) => Promise<{ ok?: boolean; error?: string | null }>
+  quitApp: () => Promise<{ ok?: boolean }>
+  reloadApp: () => Promise<{ ok?: boolean }>
   onBrowserSyncRequest: (callback: () => void) => () => void
   onBrowserState: (
     callback: (payload: {

@@ -681,6 +681,29 @@ function getFinderLabel(route: FinderRoute) {
   }
 }
 
+function getFinderRouteIcon(route: FinderRoute) {
+  if (isVolumeRoute(route)) {
+    return '◫'
+  }
+
+  switch (route) {
+    case 'computer':
+      return '⌘'
+    case 'desktop':
+      return '⌂'
+    case 'trash':
+      return '🗑'
+    case 'device':
+      return '◌'
+    case 'applications':
+      return '▦'
+    case 'dock':
+      return '◩'
+    case 'display':
+      return '◱'
+  }
+}
+
 function loadDesktopItems() {
   if (typeof window === 'undefined') {
     return [] as DesktopItem[]
@@ -1342,6 +1365,7 @@ function App() {
   const menuBarRef = useRef<HTMLDivElement | null>(null)
   const launcherPanelRef = useRef<HTMLDivElement | null>(null)
   const controlCenterRef = useRef<HTMLDivElement | null>(null)
+  const powerMenuRef = useRef<HTMLDivElement | null>(null)
   const runningGenies = useRef(new Set<string>())
   const dragPreviewRef = useRef<{ id: string; x: number; y: number } | null>(null)
   const resizePreviewRef = useRef<{ id: string; width: number; height: number } | null>(null)
@@ -1357,6 +1381,7 @@ function App() {
   const dockMouseFrameRef = useRef<number | null>(null)
   const [dockCenters, setDockCenters] = useState<Record<string, number>>({})
   const [openAppMenu, setOpenAppMenu] = useState<string | null>(null)
+  const [powerMenuOpen, setPowerMenuOpen] = useState(false)
   const [photoViewStates, setPhotoViewStates] = useState<Record<string, PhotoViewState>>({})
   const [videoPlaybackState, setVideoPlaybackState] = useState<Record<string, { playing: boolean; muted: boolean; rate: number }>>({})
   const desktopWallpaperBackground = getWallpaperBackground(desktopWallpaper)
@@ -1751,6 +1776,19 @@ function App() {
   }, [])
 
   useEffect(() => {
+    function closePowerMenu(event: MouseEvent) {
+      const target = event.target as Node | null
+      if (powerMenuRef.current?.contains(target ?? null)) {
+        return
+      }
+      setPowerMenuOpen(false)
+    }
+
+    window.addEventListener('mousedown', closePowerMenu)
+    return () => window.removeEventListener('mousedown', closePowerMenu)
+  }, [])
+
+  useEffect(() => {
     window.localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(dockItems))
   }, [dockItems])
 
@@ -2009,6 +2047,35 @@ function App() {
       setLauncherPage(0)
     }
   }, [launcherOpen])
+
+  function logoutToLogin() {
+    setPowerMenuOpen(false)
+    setOpenAppMenu(null)
+    setControlCenterOpen(false)
+    setLauncherOpen(false)
+    setContextMenu(null)
+    setLoginTransitioning(false)
+    setLoggedIn(false)
+    window.electronDesktop?.browser.hide()
+  }
+
+  async function quitDesktopApp() {
+    setPowerMenuOpen(false)
+    if (window.electronDesktop) {
+      await window.electronDesktop.quitApp()
+      return
+    }
+    window.close()
+  }
+
+  async function reloadDesktopApp() {
+    setPowerMenuOpen(false)
+    if (window.electronDesktop) {
+      await window.electronDesktop.reloadApp()
+      return
+    }
+    window.location.reload()
+  }
 
   useEffect(() => {
     function closeControlCenter(event: MouseEvent) {
@@ -4293,7 +4360,6 @@ function App() {
 
   function renderFinderContent(windowItem: WindowState) {
     const finderState = windowItem.finderState
-    const activeTab = getActiveFinderTab(finderState)
     const activeRoute = getActiveFinderRoute(finderState)
     const activeDesktopFolderId = getDesktopFolderIdFromRoute(activeRoute)
     const activeDesktopFolder = activeDesktopFolderId
@@ -4320,8 +4386,6 @@ function App() {
     const activeVolumeFolders = activeVolumeEntries.filter((entry) => entry.kind === 'directory')
     const activeVolumeFiles = activeVolumeEntries.filter((entry) => entry.kind !== 'directory')
     const activeVolumeLoading = activeVolumePath ? !!loadingVolumeMounts[activeVolumePath] : false
-    const canGoBack = !!activeTab && activeTab.historyIndex > 0
-    const canGoForward = !!activeTab && activeTab.historyIndex < activeTab.history.length - 1
     const viewMode = finderState?.viewMode ?? 'icons'
     const renderFinderListHeader = (secondaryLabel: string) => (
       <div className="finder-list-head" aria-hidden="true">
@@ -4331,107 +4395,89 @@ function App() {
     )
 
     return (
-      <div className="finder-shell">
-        <div className="finder-browser-bar">
-          <div className="finder-nav-group">
-            <button
-              type="button"
-              className="finder-toolbar-icon"
-              disabled={!canGoBack}
-              onClick={() => moveFinderHistory(windowItem.id, -1)}
-              aria-label="Atrás"
-              title="Atrás"
-            >
-              ‹
-            </button>
-            <button
-              type="button"
-              className="finder-toolbar-icon"
-              disabled={!canGoForward}
-              onClick={() => moveFinderHistory(windowItem.id, 1)}
-              aria-label="Adelante"
-              title="Adelante"
-            >
-              ›
-            </button>
-          </div>
-          <strong>{getFinderRouteLabel(activeRoute)}</strong>
-          <div className="finder-bar-actions">
-            <div className="finder-view-toggle" aria-label="Vista del Finder">
-              <button
-                type="button"
-                className={viewMode === 'icons' ? 'active' : ''}
-                onClick={() => updateFinderViewMode(windowItem.id, 'icons')}
-                aria-label="Vista por iconos"
-                title="Vista por iconos"
+      <div className="finder-shell finder-inline-toolbar">
+        <div className="finder-breadcrumbs" aria-label="Pestañas del Finder">
+          {finderState?.tabs.map((tab) => {
+            const tabRoute = tab.history[tab.historyIndex]
+            const tabLabel = getFinderRouteLabel(tabRoute)
+            return (
+              <div
+                key={tab.id}
+                className={`finder-compact-tab${tab.id === finderState.activeTabId ? ' active' : ''}`}
               >
-                ⊞
-              </button>
-              <button
-                type="button"
-                className={viewMode === 'list' ? 'active' : ''}
-                onClick={() => updateFinderViewMode(windowItem.id, 'list')}
-                aria-label="Vista por lista"
-                title="Vista por lista"
-              >
-                ☰
-              </button>
-            </div>
-            <button
-              type="button"
-              className="finder-toolbar-icon"
-              onClick={() => openFinderTab(windowItem.id, activeRoute)}
-              aria-label="Nueva pestaña"
-              title="Nueva pestaña"
-            >
-              +
-            </button>
-          </div>
-        </div>
-
-        <div className="finder-tabs">
-          {finderState?.tabs.map((tab) => (
-            <div
-              key={tab.id}
-              className={`finder-tab${tab.id === finderState.activeTabId ? ' active' : ''}`}
-            >
-              <button type="button" className="finder-tab-label" onClick={() => selectFinderTab(windowItem.id, tab.id)}>
-                {getFinderRouteLabel(tab.history[tab.historyIndex])}
-              </button>
-              <button
-                type="button"
-                className="finder-tab-close"
-                aria-label={`Cerrar pestaña ${getFinderRouteLabel(tab.history[tab.historyIndex])}`}
-                onClick={() => closeFinderTab(windowItem.id, tab.id)}
-              >
-                ×
-              </button>
-            </div>
-          ))}
+                <button type="button" className="finder-compact-tab-label" onClick={() => selectFinderTab(windowItem.id, tab.id)}>
+                  {tabLabel}
+                </button>
+                <button
+                  type="button"
+                  className="finder-compact-tab-close"
+                  aria-label={`Cerrar pestaña ${tabLabel}`}
+                  onClick={() => closeFinderTab(windowItem.id, tab.id)}
+                >
+                  ×
+                </button>
+              </div>
+            )
+          })}
         </div>
 
         <div className="finder-layout">
           <aside className="finder-sidebar">
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'desktop')}>
-              Escritorio
+            <button
+              type="button"
+              className={activeRoute === 'desktop' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'desktop')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('desktop')}</span>
+              <span>Escritorio</span>
             </button>
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'trash')}>
-              Papelera
+            <button
+              type="button"
+              className={activeRoute === 'trash' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'trash')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('trash')}</span>
+              <span>Papelera</span>
             </button>
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'computer')}>
-              Equipo
+            <button
+              type="button"
+              className={activeRoute === 'computer' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'computer')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('computer')}</span>
+              <span>Equipo</span>
             </button>
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'device')}>
-              Dispositivo
+            <button
+              type="button"
+              className={activeRoute === 'device' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'device')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('device')}</span>
+              <span>Dispositivo</span>
             </button>
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'applications')}>
-              Aplicaciones
+            <button
+              type="button"
+              className={activeRoute === 'applications' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'applications')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('applications')}</span>
+              <span>Aplicaciones</span>
             </button>
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'dock')}>
-              Dock
+            <button
+              type="button"
+              className={activeRoute === 'dock' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'dock')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('dock')}</span>
+              <span>Dock</span>
             </button>
-            <button type="button" onClick={() => navigateFinder(windowItem.id, 'display')}>
-              Pantalla
+            <button
+              type="button"
+              className={activeRoute === 'display' ? 'active' : ''}
+              onClick={() => navigateFinder(windowItem.id, 'display')}
+            >
+              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('display')}</span>
+              <span>Pantalla</span>
             </button>
             {deviceInfo?.volumes.length ? (
               <div className="finder-sidebar-section">
@@ -4440,9 +4486,11 @@ function App() {
                   <button
                     key={volume.mount}
                     type="button"
+                    className={activeVolumeMount === volume.mount ? 'active' : ''}
                     onClick={() => navigateFinder(windowItem.id, createVolumeRoute(volume.mount))}
                   >
-                    {volume.name}
+                    <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon(createVolumeRoute(volume.mount))}</span>
+                    <span>{volume.name}</span>
                   </button>
                 ))}
               </div>
@@ -6041,6 +6089,29 @@ function App() {
           </button>
           <span>{deviceInfo ? deviceInfo.osName : 'Localhost'}</span>
           <span>{clock.menu}</span>
+          <div className="menu-entry-wrap power-menu-wrap" ref={powerMenuRef}>
+            <button
+              type="button"
+              className={`power-menu-button${powerMenuOpen ? ' open' : ''}`}
+              onMouseDown={(event) => {
+                event.stopPropagation()
+              }}
+              onClick={(event) => {
+                event.stopPropagation()
+                setPowerMenuOpen((current) => !current)
+              }}
+              aria-label="Opciones de energía"
+            >
+              ⏻
+            </button>
+            {powerMenuOpen ? (
+              <div className="app-menu-dropdown power-menu-dropdown">
+                <button type="button" onClick={() => void quitDesktopApp()}>Apagar</button>
+                <button type="button" onClick={() => void reloadDesktopApp()}>Reiniciar</button>
+                <button type="button" onClick={logoutToLogin}>Cerrar sesion</button>
+              </div>
+            ) : null}
+          </div>
         </div>
       </header>
 
@@ -6268,6 +6339,12 @@ function App() {
             const safariCanGoForward = safariBrowserState
               ? safariBrowserState.historyIndex < safariBrowserState.history.length - 1
               : false
+            const finderState = item.appId === 'finder' ? item.finderState : null
+            const activeFinderTab = getActiveFinderTab(finderState)
+            const activeFinderRoute = getActiveFinderRoute(finderState)
+            const finderCanGoBack = !!activeFinderTab && activeFinderTab.historyIndex > 0
+            const finderCanGoForward = !!activeFinderTab && activeFinderTab.historyIndex < activeFinderTab.history.length - 1
+            const finderViewMode = finderState?.viewMode ?? 'icons'
 
             return (
               <article
@@ -6389,6 +6466,74 @@ function App() {
                             title="Recargar"
                           >
                             ↻
+                          </button>
+                        </div>
+                      </>
+                    ) : item.appId === 'finder' && finderState ? (
+                      <>
+                        <div className="window-title finder-title">
+                          <span className="window-app-icon" style={{ background: app.accent }}>
+                            {renderDockIconContent(app.iconSpec)}
+                          </span>
+                          <span>{title}</span>
+                        </div>
+                        <div className="finder-nav-group finder-toolbar-group">
+                          <button
+                            type="button"
+                            className="finder-toolbar-icon"
+                            disabled={!finderCanGoBack}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => moveFinderHistory(item.id, -1)}
+                            aria-label="Atrás"
+                            title="Atrás"
+                          >
+                            ‹
+                          </button>
+                          <button
+                            type="button"
+                            className="finder-toolbar-icon"
+                            disabled={!finderCanGoForward}
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => moveFinderHistory(item.id, 1)}
+                            aria-label="Adelante"
+                            title="Adelante"
+                          >
+                            ›
+                          </button>
+                        </div>
+                        <div className="finder-toolbar-spacer" />
+                        <div className="finder-bar-actions finder-toolbar-actions">
+                          <div className="finder-view-toggle" aria-label="Vista del Finder">
+                            <button
+                              type="button"
+                              className={finderViewMode === 'icons' ? 'active' : ''}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={() => updateFinderViewMode(item.id, 'icons')}
+                              aria-label="Vista por iconos"
+                              title="Vista por iconos"
+                            >
+                              ⊞
+                            </button>
+                            <button
+                              type="button"
+                              className={finderViewMode === 'list' ? 'active' : ''}
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={() => updateFinderViewMode(item.id, 'list')}
+                              aria-label="Vista por lista"
+                              title="Vista por lista"
+                            >
+                              ☰
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="finder-toolbar-icon"
+                            onPointerDown={(event) => event.stopPropagation()}
+                            onClick={() => openFinderTab(item.id, activeFinderRoute)}
+                            aria-label="Nueva pestaña"
+                            title="Nueva pestaña"
+                          >
+                            +
                           </button>
                         </div>
                       </>

@@ -203,6 +203,7 @@ label {
   backdrop-filter: blur(22px);
   border-bottom: 1px solid rgba(255, 255, 255, 0.18);
   z-index: 1000;
+  -webkit-app-region: drag;
 }
 
 .menu-left,
@@ -211,6 +212,16 @@ label {
   align-items: center;
   gap: 14px;
   font-size: 13px;
+}
+
+.menu-entry-wrap,
+.apple-button,
+.menu-entry-button,
+.control-center-toggle,
+.power-menu-button,
+.app-menu-dropdown,
+.app-menu-dropdown button {
+  -webkit-app-region: no-drag;
 }
 
 .menu-entry-wrap {
@@ -239,12 +250,13 @@ label {
   display: grid;
   gap: 4px;
   padding: 8px;
-  border-radius: 12px;
-  background: rgba(14, 18, 26, 0.92);
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(18px);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.28);
+  border-radius: 6px;
+  background: rgba(248, 251, 255, 0.58);
+  border: 1px solid rgba(176, 189, 211, 0.28);
+  backdrop-filter: blur(30px) saturate(1.12);
+  box-shadow: 0 18px 34px rgba(18, 29, 52, 0.14);
   z-index: 1400;
+  animation: menuFadeIn 140ms ease-out;
 }
 
 .app-menu-dropdown button {
@@ -252,14 +264,14 @@ label {
   padding: 10px 12px;
   text-align: left;
   font: inherit;
-  color: #eef6ff;
+  color: #22324d;
   background: transparent;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
 }
 
 .app-menu-dropdown button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(214, 224, 240, 0.7);
 }
 
 .apple-mark {
@@ -295,6 +307,54 @@ label {
   justify-content: center;
   width: 18px;
   height: 18px;
+}
+
+.power-menu-wrap {
+  position: relative;
+}
+
+.power-menu-button {
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  background: transparent;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.power-menu-button.open,
+.power-menu-button:hover {
+  opacity: 0.88;
+}
+
+.power-menu-dropdown {
+  left: auto;
+  right: 0;
+  min-width: 170px;
+}
+
+.desktop-shell.appearance-dark .app-menu-dropdown,
+.desktop-shell.appearance-dark .context-menu {
+  background: rgba(18, 24, 36, 0.58);
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 18px 34px rgba(0, 0, 0, 0.24);
+}
+
+.desktop-shell.appearance-dark .app-menu-dropdown button,
+.desktop-shell.appearance-dark .context-menu button {
+  color: #dbe1ea;
+}
+
+.desktop-shell.appearance-dark .app-menu-dropdown button:hover,
+.desktop-shell.appearance-dark .context-menu button:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .control-center-icon {
@@ -657,7 +717,7 @@ label {
 .desktop-heavy-windows .control-center,
 .desktop-heavy-windows .context-menu,
 .desktop-heavy-windows .app-menu-dropdown {
-  backdrop-filter: blur(14px);
+  backdrop-filter: blur(18px);
 }
 
 .app-window.maximized,
@@ -736,6 +796,13 @@ label {
 }
 
 .safari-title {
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+
+.finder-title {
   gap: 8px;
   min-width: 0;
   font-size: 13px;
@@ -850,6 +917,10 @@ label {
   border-bottom: 1px solid rgba(203, 211, 224, 0.72);
 }
 
+.finder-inline-toolbar .finder-browser-bar {
+  display: none;
+}
+
 .finder-browser-bar button,
 .finder-tab,
 .finder-card,
@@ -872,6 +943,18 @@ label {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.finder-toolbar-group {
+  flex: 0 0 auto;
+}
+
+.finder-toolbar-spacer {
+  flex: 1;
+}
+
+.finder-toolbar-actions {
+  flex: 0 0 auto;
 }
 
 .finder-view-toggle {
@@ -936,54 +1019,59 @@ label {
   color: #33435c;
 }
 
-.finder-tabs {
-  display: flex;
-  gap: 8px;
-  padding: 8px 12px 0;
-  background: linear-gradient(180deg, rgba(246, 248, 252, 0.98), rgba(241, 244, 249, 0.98));
-  border-bottom: 1px solid rgba(214, 221, 232, 0.7);
-}
-
-.finder-tab {
+.finder-breadcrumbs {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px 6px 14px;
+  flex-wrap: wrap;
+  padding: 6px 14px;
+  background: rgba(250, 251, 253, 0.96);
+  border-bottom: 1px solid rgba(220, 226, 236, 0.72);
+  min-height: 32px;
+}
+
+.finder-compact-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.5);
-  color: #4d5d78;
+  background: transparent;
+  color: #7d8a9f;
 }
 
-.finder-tab.active {
-  background: white;
-  color: #22324d;
-  box-shadow: 0 8px 18px rgba(17, 24, 39, 0.08);
+.finder-compact-tab.active {
+  background: rgba(224, 231, 241, 0.8);
+  color: #33435c;
 }
 
-.finder-tab-label,
-.finder-tab-close {
+.finder-compact-tab-label,
+.finder-compact-tab-close {
   border: 0;
   background: transparent;
-  font: inherit;
   color: inherit;
-  cursor: pointer;
+  font: inherit;
 }
 
-.finder-tab-label {
-  padding: 2px 0;
+.finder-compact-tab-label {
+  padding: 0;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
-.finder-tab-close {
-  width: 22px;
-  height: 22px;
+.finder-compact-tab-close {
+  width: 16px;
+  height: 16px;
   display: grid;
   place-items: center;
+  padding: 0;
   border-radius: 999px;
-  font-size: 14px;
+  font-size: 11px;
   line-height: 1;
 }
 
-.finder-tab-close:hover {
+.finder-compact-tab-close:hover {
   background: rgba(15, 23, 42, 0.08);
 }
 
@@ -1018,7 +1106,11 @@ label {
 
 .finder-sidebar button {
   border: 0;
-  padding: 4px 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
   text-align: left;
   font: inherit;
   color: inherit;
@@ -1028,6 +1120,27 @@ label {
 
 .finder-sidebar button:hover {
   color: #22324d;
+  background: rgba(221, 229, 239, 0.6);
+}
+
+.finder-sidebar button.active {
+  color: #1f2f4d;
+  background: rgba(204, 220, 246, 0.88);
+  font-weight: 600;
+}
+
+.finder-sidebar-icon {
+  width: 16px;
+  flex: 0 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #6e7f98;
+  font-size: 13px;
+}
+
+.finder-sidebar button.active .finder-sidebar-icon {
+  color: #345ea8;
 }
 
 .finder-panel,
@@ -1151,14 +1264,44 @@ label {
   border-bottom-color: rgba(255, 255, 255, 0.08);
 }
 
-.desktop-shell.appearance-dark .finder-tabs {
-  background: linear-gradient(180deg, rgba(21, 27, 40, 0.98), rgba(17, 22, 33, 0.98));
+.desktop-shell.appearance-dark .finder-breadcrumbs {
+  background: rgba(16, 22, 33, 0.96);
   border-bottom-color: rgba(255, 255, 255, 0.08);
+}
+
+.desktop-shell.appearance-dark .finder-compact-tab {
+  color: rgba(215, 221, 232, 0.66);
+}
+
+.desktop-shell.appearance-dark .finder-compact-tab.active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #dbe1ea;
+}
+
+.desktop-shell.appearance-dark .finder-compact-tab-close:hover {
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .desktop-shell.appearance-dark .finder-sidebar {
   background: linear-gradient(180deg, rgba(19, 25, 37, 0.98), rgba(15, 20, 31, 0.98));
   border-right-color: rgba(255, 255, 255, 0.08);
+}
+
+.desktop-shell.appearance-dark .finder-sidebar button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.desktop-shell.appearance-dark .finder-sidebar button.active {
+  background: rgba(92, 116, 168, 0.28);
+  color: #dbe1ea;
+}
+
+.desktop-shell.appearance-dark .finder-sidebar-icon {
+  color: rgba(215, 221, 232, 0.66);
+}
+
+.desktop-shell.appearance-dark .finder-sidebar button.active .finder-sidebar-icon {
+  color: #b9d0ff;
 }
 
 .desktop-shell.appearance-dark .finder-file-thumb {
@@ -2396,6 +2539,10 @@ label {
   padding: 0 10px 0 14px;
 }
 
+.finder-inline-toolbar .finder-breadcrumbs {
+  padding-left: 18px;
+}
+
 .safari-toolbar-address {
   max-width: none;
   margin: 0;
@@ -2825,28 +2972,42 @@ label {
   gap: 6px;
   min-width: 220px;
   padding: 8px;
-  border-radius: 9px;
-  background: rgba(14, 18, 26, 0.72);
-  backdrop-filter: blur(24px) saturate(1.08);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.22);
+  border-radius: 5px;
+  background: rgba(248, 251, 255, 0.56);
+  border: 1px solid rgba(176, 189, 211, 0.28);
+  backdrop-filter: blur(32px) saturate(1.14);
+  box-shadow: 0 18px 34px rgba(18, 29, 52, 0.14);
+  animation: menuFadeIn 140ms ease-out;
 }
 
 .context-menu button {
   border: 0;
   padding: 10px 12px;
   text-align: left;
-  color: #eef6ff;
+  color: #22324d;
   background: transparent;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
 }
 
 .context-menu button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(214, 224, 240, 0.7);
 }
 
 .context-menu button:last-child {
   margin-bottom: 0;
+}
+
+@keyframes menuFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 @media (max-width: 900px) {

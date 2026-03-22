@@ -300,8 +300,10 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 720,
     show: false,
+    frame: false,
+    titleBarStyle: 'hidden',
+    roundedCorners: false,
     backgroundColor: '#0f172a',
-    autoHideMenuBar: true,
     title: 'Mactorno',
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
@@ -420,6 +422,16 @@ app.whenReady().then(() => {
   ipcMain.handle('terminal:execute', async (_event, payload) => executeTerminalCommand(payload.command, payload.cwd))
   ipcMain.handle('apps:launch', async (_event, target) => {
     return launchApp(target)
+  })
+  ipcMain.handle('window:quit', async () => {
+    app.quit()
+    return { ok: true }
+  })
+  ipcMain.handle('window:reload', async () => {
+    if (mainWindow) {
+      mainWindow.reload()
+    }
+    return { ok: true }
   })
   ipcMain.handle('media:pick-file', async (_event, kind) => {
     const result = await dialog.showOpenDialog(mainWindow ?? undefined, {
