@@ -36,6 +36,7 @@ type ElectronDesktopApi = {
     goBack: () => void
     goForward: () => void
     reload: () => void
+    setAppearance: (mode: 'classic' | 'dark') => void
     openExternal: (url: string) => void
     hide: () => void
   }

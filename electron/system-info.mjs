@@ -112,10 +112,16 @@ async function getSystemWallpapers() {
 const APPS_CACHE_TTL_MS = 5 * 60 * 1000
 const DEVICE_INFO_CACHE_TTL_MS = 15 * 1000
 const SYSTEM_CONTROLS_CACHE_TTL_MS = 5 * 1000
+const SHORTCUT_CACHE_TTL_MS = 5 * 60 * 1000
+const ICON_CACHE_TTL_MS = 5 * 60 * 1000
+const VOLUME_ENTRIES_CACHE_TTL_MS = 10 * 1000
 
 const appsCache = { expiresAt: 0, value: undefined, pending: undefined }
 const deviceInfoCache = { expiresAt: 0, value: undefined, pending: undefined }
 const systemControlsCache = { expiresAt: 0, value: undefined, pending: undefined }
+const shortcutCache = new Map()
+const iconDataCache = new Map()
+const volumeEntriesCache = new Map()
 
 async function getCachedValue(cache, ttlMs, loader) {
   const now = Date.now()
@@ -138,6 +144,32 @@ async function getCachedValue(cache, ttlMs, loader) {
     })
 
   return cache.pending
+}
+
+async function getKeyedCachedValue(cache, key, ttlMs, loader) {
+  const now = Date.now()
+  const current = cache.get(key)
+  if (current?.value !== undefined && current.expiresAt > now) {
+    return current.value
+  }
+
+  if (current?.pending) {
+    return current.pending
+  }
+
+  const nextEntry = current ?? { expiresAt: 0, value: undefined, pending: undefined }
+  nextEntry.pending = loader()
+    .then((value) => {
+      nextEntry.value = value
+      nextEntry.expiresAt = Date.now() + ttlMs
+      return value
+    })
+    .finally(() => {
+      nextEntry.pending = undefined
+    })
+
+  cache.set(key, nextEntry)
+  return nextEntry.pending
 }
 
 function safeReadDir(dirPath) {
@@ -212,7 +244,8 @@ function fileToDataUrl(filePath) {
 }
 
 async function resolveWindowsShortcut(filePath) {
-  const script = `
+  return getKeyedCachedValue(shortcutCache, filePath.toLowerCase(), SHORTCUT_CACHE_TTL_MS, async () => {
+    const script = `
 $shell = New-Object -ComObject WScript.Shell
 $shortcut = $shell.CreateShortcut('${filePath.replace(/'/g, "''")}')
 $payload = [pscustomobject]@{
@@ -221,12 +254,13 @@ $payload = [pscustomobject]@{
 }
 $payload | ConvertTo-Json -Compress
 `
-  const output = await runCommand('powershell.exe', ['-NoProfile', '-Command', script])
-  try {
-    return JSON.parse(output)
-  } catch {
-    return null
-  }
+    const output = await runCommand('powershell.exe', ['-NoProfile', '-Command', script])
+    try {
+      return JSON.parse(output)
+    } catch {
+      return null
+    }
+  })
 }
 
 async function withTimeout(promise, ms, fallback = null) {
@@ -246,7 +280,9 @@ async function withTimeout(promise, ms, fallback = null) {
 }
 
 async function extractWindowsIconData(targetPath, iconLocation = '') {
-  const script = `
+  const cacheKey = `${targetPath}::${iconLocation}`.toLowerCase()
+  return getKeyedCachedValue(iconDataCache, cacheKey, ICON_CACHE_TTL_MS, async () => {
+    const script = `
 Add-Type -AssemblyName System.Drawing
 $source = '${(iconLocation || targetPath).replace(/'/g, "''")}'
 if ([string]::IsNullOrWhiteSpace($source)) { return }
@@ -261,8 +297,9 @@ $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
 [Convert]::ToBase64String($stream.ToArray())
 `
 
-  const output = await runCommand('powershell.exe', ['-NoProfile', '-Command', script])
-  return output.trim() ? `data:image/png;base64,${output.trim()}` : null
+    const output = await runCommand('powershell.exe', ['-NoProfile', '-Command', script])
+    return output.trim() ? `data:image/png;base64,${output.trim()}` : null
+  })
 }
 
 function parseInternetShortcut(filePath) {
@@ -697,77 +734,79 @@ export async function listVolumeEntries(target) {
     return []
   }
 
-  try {
-    const baseEntries = safeReadDir(volumePath)
-      .map((entry) => {
-        const fullPath = path.join(volumePath, entry.name)
-        let sizeBytes = null
+  return getKeyedCachedValue(volumeEntriesCache, volumePath.toLowerCase(), VOLUME_ENTRIES_CACHE_TTL_MS, async () => {
+    try {
+      const baseEntries = safeReadDir(volumePath)
+        .map((entry) => {
+          const fullPath = path.join(volumePath, entry.name)
+          let sizeBytes = null
 
-        if (!entry.isDirectory()) {
+          if (!entry.isDirectory()) {
+            try {
+              sizeBytes = fs.statSync(fullPath).size
+            } catch {
+              sizeBytes = null
+            }
+          }
+
+          return {
+            name: entry.name,
+            path: fullPath,
+            kind: entry.isDirectory() ? 'directory' : 'file',
+            extension: entry.isDirectory() ? '' : path.extname(entry.name).toLowerCase(),
+            sizeBytes,
+            icon: null,
+          }
+        })
+        .sort((left, right) => {
+          if (left.kind !== right.kind) {
+            return left.kind === 'directory' ? -1 : 1
+          }
+          return left.name.localeCompare(right.name)
+        })
+        .slice(0, 200)
+
+      if (process.platform !== 'win32') {
+        return baseEntries
+      }
+
+      let iconBudget = 0
+      return Promise.all(
+        baseEntries.map(async (entry) => {
+          if (!shouldExtractEntryIcon(entry) || iconBudget >= 24) {
+            return entry
+          }
+
+          iconBudget += 1
+
           try {
-            sizeBytes = fs.statSync(fullPath).size
+            if (entry.extension === '.lnk') {
+              const shortcut = await withTimeout(resolveWindowsShortcut(entry.path), 250)
+              const targetPath = shortcut?.TargetPath || entry.path
+              const icon = await withTimeout(extractWindowsIconData(targetPath, shortcut?.IconLocation ?? ''), 250)
+              return { ...entry, icon }
+            }
+
+            if (entry.extension === '.url') {
+              const shortcut = parseInternetShortcut(entry.path)
+              const targetPath = shortcut.url || entry.path
+              const icon = shortcut.iconFile
+                ? await withTimeout(extractWindowsIconData(targetPath, shortcut.iconFile), 250)
+                : null
+              return { ...entry, icon }
+            }
+
+            const icon = await withTimeout(extractWindowsIconData(entry.path), 250)
+            return { ...entry, icon }
           } catch {
-            sizeBytes = null
+            return entry
           }
-        }
-
-        return {
-          name: entry.name,
-          path: fullPath,
-          kind: entry.isDirectory() ? 'directory' : 'file',
-          extension: entry.isDirectory() ? '' : path.extname(entry.name).toLowerCase(),
-          sizeBytes,
-          icon: null,
-        }
-      })
-      .sort((left, right) => {
-        if (left.kind !== right.kind) {
-          return left.kind === 'directory' ? -1 : 1
-        }
-        return left.name.localeCompare(right.name)
-      })
-      .slice(0, 200)
-
-    if (process.platform !== 'win32') {
-      return baseEntries
+        }),
+      )
+    } catch {
+      return []
     }
-
-    let iconBudget = 0
-    return Promise.all(
-      baseEntries.map(async (entry) => {
-        if (!shouldExtractEntryIcon(entry) || iconBudget >= 24) {
-          return entry
-        }
-
-        iconBudget += 1
-
-        try {
-          if (entry.extension === '.lnk') {
-            const shortcut = await withTimeout(resolveWindowsShortcut(entry.path), 250)
-            const targetPath = shortcut?.TargetPath || entry.path
-            const icon = await withTimeout(extractWindowsIconData(targetPath, shortcut?.IconLocation ?? ''), 250)
-            return { ...entry, icon }
-          }
-
-          if (entry.extension === '.url') {
-            const shortcut = parseInternetShortcut(entry.path)
-            const targetPath = shortcut.url || entry.path
-            const icon = shortcut.iconFile
-              ? await withTimeout(extractWindowsIconData(targetPath, shortcut.iconFile), 250)
-              : null
-            return { ...entry, icon }
-          }
-
-          const icon = await withTimeout(extractWindowsIconData(entry.path), 250)
-          return { ...entry, icon }
-        } catch {
-          return entry
-        }
-      }),
-    )
-  } catch {
-    return []
-  }
+  })
 }
 
 function runCommand(command, args) {

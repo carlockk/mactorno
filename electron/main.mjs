@@ -2,7 +2,7 @@ import path from 'node:path'
 import { createReadStream, promises as fs } from 'node:fs'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, dialog, ipcMain, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron'
 import { executeTerminalCommand, getDeviceInfo, getInstalledApps, getSystemControls, launchApp, listVolumeEntries, setSystemControls } from './system-info.mjs'
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
@@ -16,6 +16,8 @@ let mainWindow = null
 let browserWindow = null
 let browserVisible = false
 let currentBrowserUrl = ''
+let browserSyncRequestTimer = null
+let browserAppearance = 'classic'
 const desktopUserAgent = (() => {
   const chromeVersion = process.versions.chrome
   return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
@@ -70,22 +72,6 @@ function normalizeHostname(url) {
   }
 }
 
-function isExternalOnlyHostname(hostname) {
-  return [
-    'google.com',
-    'www.google.com',
-    'google.cl',
-    'www.google.cl',
-    'accounts.google.com',
-    'chat.openai.com',
-    'chatgpt.com',
-    'www.chatgpt.com',
-    'auth.openai.com',
-    'openai.com',
-    'www.openai.com',
-  ].some((candidate) => hostname === candidate || hostname.endsWith(`.${candidate}`))
-}
-
 function shouldOpenExternally(url, errorDescription = '') {
   if (!/^https?:\/\//i.test(url)) {
     return false
@@ -94,10 +80,6 @@ function shouldOpenExternally(url, errorDescription = '') {
   const hostname = normalizeHostname(url)
   if (!hostname) {
     return false
-  }
-
-  if (isExternalOnlyHostname(hostname)) {
-    return true
   }
 
   return errorDescription === 'ERR_BLOCKED_BY_RESPONSE'
@@ -127,11 +109,6 @@ function navigateBrowserWindow(targetWindow, url) {
   }
   emitBrowserState()
 
-  if (shouldOpenExternally(url)) {
-    openExternallyAndTrack(url, 'Este sitio se abre fuera de Mactorno porque bloquea navegadores embebidos.')
-    return
-  }
-
   targetWindow.webContents.loadURL(url).catch(() => {})
 }
 
@@ -150,6 +127,46 @@ function emitBrowserSyncRequest() {
   mainWindow.webContents.send('desktop:request-browser-sync')
 }
 
+function scheduleBrowserSyncRequest() {
+  if (!mainWindow || !browserVisible || browserSyncRequestTimer !== null) {
+    return
+  }
+
+  browserSyncRequestTimer = setTimeout(() => {
+    browserSyncRequestTimer = null
+    emitBrowserSyncRequest()
+  }, 16)
+}
+
+async function applyBrowserAppearance(targetWindow = browserWindow) {
+  nativeTheme.themeSource = browserAppearance === 'dark' ? 'dark' : 'light'
+
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    return
+  }
+
+  try {
+    if (!targetWindow.webContents.debugger.isAttached()) {
+      targetWindow.webContents.debugger.attach('1.3')
+    }
+
+    await targetWindow.webContents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+      media: '',
+      features: [
+        {
+          name: 'prefers-color-scheme',
+          value: browserAppearance === 'dark' ? 'dark' : 'light',
+        },
+      ],
+    })
+    await targetWindow.webContents.debugger.sendCommand('Emulation.setAutoDarkModeOverride', {
+      enabled: browserAppearance === 'dark',
+    })
+  } catch {
+    // Si Chromium no soporta alguna emulacion, mantiene el navegador funcional.
+  }
+}
+
 function attachBrowserWindowEvents(targetWindow) {
   targetWindow.webContents.setUserAgent(desktopUserAgent)
   targetWindow.webContents.session.setPermissionCheckHandler((_webContents, permission) => {
@@ -161,11 +178,6 @@ function attachBrowserWindowEvents(targetWindow) {
 
   targetWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (!url) {
-      return { action: 'deny' }
-    }
-
-    if (shouldOpenExternally(url)) {
-      openExternallyAndTrack(url, 'Este sitio se abrio en tu navegador predeterminado.')
       return { action: 'deny' }
     }
 
@@ -204,6 +216,26 @@ function attachBrowserWindowEvents(targetWindow) {
     browserState = {
       ...browserState,
       url,
+    }
+    emitBrowserState()
+  })
+
+  targetWindow.webContents.on('did-frame-finish-load', (_event, isMainFrame) => {
+    if (!isMainFrame) {
+      return
+    }
+
+    browserState = {
+      ...browserState,
+      loading: false,
+    }
+    emitBrowserState()
+  })
+
+  targetWindow.webContents.on('did-finish-load', () => {
+    browserState = {
+      ...browserState,
+      loading: false,
     }
     emitBrowserState()
   })
@@ -266,7 +298,7 @@ function ensureBrowserWindow() {
       fullscreenable: true,
       skipTaskbar: true,
       roundedCorners: false,
-      backgroundColor: '#ffffff',
+      backgroundColor: browserAppearance === 'dark' ? '#111827' : '#ffffff',
       webPreferences: {
         sandbox: false,
         contextIsolation: true,
@@ -276,6 +308,7 @@ function ensureBrowserWindow() {
       },
     })
     attachBrowserWindowEvents(browserWindow)
+    void applyBrowserAppearance(browserWindow)
     browserWindow.on('closed', () => {
       browserWindow = null
     })
@@ -290,6 +323,10 @@ function hideBrowserWindow() {
   }
 
   browserVisible = false
+  if (browserSyncRequestTimer !== null) {
+    clearTimeout(browserSyncRequestTimer)
+    browserSyncRequestTimer = null
+  }
   browserWindow.hide()
 }
 
@@ -327,34 +364,26 @@ function createWindow() {
   })
 
   mainWindow.on('resize', () => {
-    if (!browserVisible) {
-      return
-    }
-    emitBrowserSyncRequest()
+    scheduleBrowserSyncRequest()
   })
 
   mainWindow.on('move', () => {
-    if (!browserVisible) {
-      return
-    }
-    emitBrowserSyncRequest()
+    scheduleBrowserSyncRequest()
   })
 
   mainWindow.on('maximize', () => {
-    if (!browserVisible) {
-      return
-    }
-    emitBrowserSyncRequest()
+    scheduleBrowserSyncRequest()
   })
 
   mainWindow.on('unmaximize', () => {
-    if (!browserVisible) {
-      return
-    }
-    emitBrowserSyncRequest()
+    scheduleBrowserSyncRequest()
   })
 
   mainWindow.on('closed', () => {
+    if (browserSyncRequestTimer !== null) {
+      clearTimeout(browserSyncRequestTimer)
+      browserSyncRequestTimer = null
+    }
     mainWindow = null
     browserWindow = null
   })
@@ -513,7 +542,22 @@ app.whenReady().then(() => {
   })
 
   ipcMain.on('browser:reload', () => {
-    browserWindow?.webContents.reload()
+    if (!browserWindow) {
+      return
+    }
+
+    const loadedUrl = browserWindow.webContents.getURL()
+    if (!loadedUrl || (browserState.lastError && currentBrowserUrl)) {
+      navigateBrowserWindow(browserWindow, currentBrowserUrl || browserState.url)
+      return
+    }
+
+    browserWindow.webContents.reload()
+  })
+
+  ipcMain.on('browser:set-appearance', (_event, mode) => {
+    browserAppearance = mode === 'dark' ? 'dark' : 'classic'
+    void applyBrowserAppearance()
   })
 
   ipcMain.on('browser:open-external', (_event, url) => {

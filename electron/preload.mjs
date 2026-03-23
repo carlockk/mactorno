@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('electronDesktop', {
     goBack: () => ipcRenderer.send('browser:go-back'),
     goForward: () => ipcRenderer.send('browser:go-forward'),
     reload: () => ipcRenderer.send('browser:reload'),
+    setAppearance: (mode) => ipcRenderer.send('browser:set-appearance', mode),
     openExternal: (url) => ipcRenderer.send('browser:open-external', url),
     hide: () => ipcRenderer.send('browser:hide'),
   },

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
   AnimatePresence,
   motion,
@@ -50,6 +50,7 @@ type BrowserState = {
   inputValue: string
   reloadKey: number
   loading: boolean
+  progress: number
   title: string
   lastError: string | null
 }
@@ -358,6 +359,9 @@ const NOTES_STORAGE_KEY = 'mactorno-notes'
 const DESKTOP_ITEMS_STORAGE_KEY = 'mactorno-desktop-items'
 const DESKTOP_TRASH_POSITION_STORAGE_KEY = 'mactorno-desktop-trash-position'
 const SYSTEM_CONTROLS_DEBOUNCE_MS = 120
+const BROWSER_PROGRESS_SHOW_DELAY_MS = 120
+const BROWSER_PROGRESS_MIN_VISIBLE_MS = 200
+const BROWSER_PROGRESS_HIDE_DELAY_MS = 220
 const DEFAULT_DOCK_ITEMS: AppId[] = ['finder', 'launcher', 'notes', 'safari', 'photos', 'videos', 'calculator', 'docksettings', 'terminal']
 const SAFARI_HOME_URL = 'mactorno://home'
 const DEFAULT_BROWSER_URL = SAFARI_HOME_URL
@@ -621,28 +625,34 @@ function isWallpaperSelectionActive(current: WallpaperSelection, candidate: Wall
   return current.kind === candidate.kind && current.value === candidate.value
 }
 
+const MENU_TIME_FORMATTER = new Intl.DateTimeFormat('es-CL', {
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
+const LOGIN_DATE_FORMATTER = new Intl.DateTimeFormat('es-CL', {
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+})
+
+const LOGIN_TIME_FORMATTER = new Intl.DateTimeFormat('es-CL', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+})
+
 function formatTime(date: Date) {
-  return new Intl.DateTimeFormat('es-CL', {
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
+  return MENU_TIME_FORMATTER.format(date)
 }
 
 function formatLoginDate(date: Date) {
-  return new Intl.DateTimeFormat('es-CL', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  }).format(date)
+  return LOGIN_DATE_FORMATTER.format(date)
 }
 
 function formatLoginTime(date: Date) {
-  return new Intl.DateTimeFormat('es-CL', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(date)
+  return LOGIN_TIME_FORMATTER.format(date)
 }
 
 function getApp(appId: AppId) {
@@ -876,6 +886,7 @@ function createBrowserState(initialUrl = DEFAULT_BROWSER_URL): BrowserState {
     inputValue: normalized,
     reloadKey: 0,
     loading: false,
+    progress: 0,
     title: '',
     lastError: null,
   }
@@ -1068,7 +1079,7 @@ function clampControlValue(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
 
-function DockIconButton({
+const DockIconButton = memo(function DockIconButton({
   name,
   accent,
   icon,
@@ -1097,7 +1108,6 @@ function DockIconButton({
   onDragEnd?: (event: React.DragEvent<HTMLButtonElement>) => void
   onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void
 }) {
-  const itemRef = useRef<HTMLButtonElement | null>(null)
   const [hovered, setHovered] = useState(false)
 
   const distance = useTransform(mouseX, (value) => value - centerX)
@@ -1122,7 +1132,6 @@ function DockIconButton({
   return (
     <motion.button
       ref={(node) => {
-        itemRef.current = node
         registerRef(id, node)
       }}
       type="button"
@@ -1162,7 +1171,7 @@ function DockIconButton({
       />
     </motion.button>
   )
-}
+})
 
 function VideoPlayer({
   src,
@@ -1379,6 +1388,19 @@ function App() {
   const systemControlsFlushTimerRef = useRef<number | null>(null)
   const pendingDockMouseX = useRef<number | null>(null)
   const dockMouseFrameRef = useRef<number | null>(null)
+  const windowsRef = useRef<WindowState[]>(windows)
+  const volumeEntriesByMountRef = useRef(volumeEntriesByMount)
+  const loadingVolumeMountsRef = useRef(loadingVolumeMounts)
+  const browserSyncFrameRef = useRef<number | null>(null)
+  const scheduleBrowserHostSyncRef = useRef<(() => void) | null>(null)
+  const lastBrowserSyncSignatureRef = useRef('')
+  const browserProgressResetTimersRef = useRef<Record<string, number>>({})
+  const browserProgressShowTimersRef = useRef<Record<string, number>>({})
+  const browserProgressVisibleSinceRef = useRef<Record<string, number>>({})
+  const moveDesktopItemToFolderRef = useRef<(itemId: string, folderId: string) => void>(() => {})
+  const moveDesktopItemToTrashRef = useRef<(itemId: string) => void>(() => {})
+  const completeBrowserProgressRef = useRef<(windowId: string, hasError?: boolean) => void>(() => {})
+  const activeSafariWindowIdRef = useRef<string | null>(null)
   const [dockCenters, setDockCenters] = useState<Record<string, number>>({})
   const [openAppMenu, setOpenAppMenu] = useState<string | null>(null)
   const [powerMenuOpen, setPowerMenuOpen] = useState(false)
@@ -1401,6 +1423,7 @@ function App() {
     () => windows.filter((item) => !item.minimized && !item.genie?.removeOnFinish).length,
     [windows],
   )
+  const openAppIds = useMemo(() => new Set(windows.map((item) => item.appId)), [windows])
   const visibleDockAppIds = useMemo(() => {
     const runningDockableApps = windows
       .map((item) => item.appId)
@@ -1428,6 +1451,35 @@ function App() {
       .filter((volume) => !pinnedTargets.has(createVolumeRoute(volume.mount)))
       .map((volume) => createVolumeDockItem(volume))
   }, [customDockItems, deviceInfo?.volumes, windows])
+  const activeWindow = useMemo(
+    () =>
+      [...windows]
+        .filter((item) => !item.minimized)
+        .sort((left, right) => right.zIndex - left.zIndex)[0],
+    [windows],
+  )
+  const activeSafariWindow = useMemo(
+    () =>
+      [...windows]
+        .filter((item) => item.appId === 'safari' && !item.minimized)
+        .sort((left, right) => right.zIndex - left.zIndex)[0],
+    [windows],
+  )
+  const resolvedApps = useMemo(() => {
+    return Object.fromEntries(
+      APPS.map((baseApp) => {
+        const override = appVisualOverrides[baseApp.id]
+        return [
+          baseApp.id,
+          {
+            ...baseApp,
+            accent: override?.accent ?? baseApp.accent,
+            iconSpec: normalizeIconSpec(override?.icon ?? baseApp.icon),
+          },
+        ]
+      }),
+    ) as Record<AppId, DesktopApp & { iconSpec: DockIconSpec }>
+  }, [appVisualOverrides])
 
   function openContextMenuAt(payload: Record<string, unknown>, x: number, y: number) {
     const estimatedWidth = 240
@@ -1589,13 +1641,7 @@ function App() {
   }
 
   function getResolvedApp(appId: AppId) {
-    const baseApp = getApp(appId)
-    const override = appVisualOverrides[appId]
-    return {
-      ...baseApp,
-      accent: override?.accent ?? baseApp.accent,
-      iconSpec: normalizeIconSpec(override?.icon ?? baseApp.icon),
-    }
+    return resolvedApps[appId]
   }
 
   function readIconFile(file: File, onLoad: (value: string) => void) {
@@ -1808,6 +1854,10 @@ function App() {
 
   useEffect(() => {
     window.localStorage.setItem(APPEARANCE_MODE_STORAGE_KEY, appearanceMode)
+  }, [appearanceMode])
+
+  useEffect(() => {
+    window.electronDesktop?.browser.setAppearance(appearanceMode)
   }, [appearanceMode])
 
   useEffect(() => {
@@ -2161,11 +2211,11 @@ function App() {
         const trashTarget = dropTarget?.closest<HTMLElement>('[data-trash-drop-target]')
 
         if (trashTarget) {
-          moveDesktopItemToTrash(activeDrag.id)
+          moveDesktopItemToTrashRef.current(activeDrag.id)
         } else if (folderTarget) {
           const folderId = folderTarget.dataset.desktopFolderId
           if (folderId) {
-            moveDesktopItemToFolder(activeDrag.id, folderId)
+            moveDesktopItemToFolderRef.current(activeDrag.id, folderId)
           }
         }
       }
@@ -2214,6 +2264,8 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const resetTimers = browserProgressResetTimersRef.current
+    const showTimers = browserProgressShowTimersRef.current
     return () => {
       if (systemControlsFlushTimerRef.current !== null) {
         window.clearTimeout(systemControlsFlushTimerRef.current)
@@ -2221,7 +2273,37 @@ function App() {
       if (dockMouseFrameRef.current !== null) {
         window.cancelAnimationFrame(dockMouseFrameRef.current)
       }
+      Object.values(resetTimers).forEach((timer) => window.clearTimeout(timer))
+      Object.values(showTimers).forEach((timer) => window.clearTimeout(timer))
     }
+  }, [])
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setWindows((current) => {
+        let changed = false
+        const next = current.map((item) => {
+          if (!item.browserState?.loading || item.browserState.progress <= 0 || item.browserState.progress >= 85) {
+            return item
+          }
+
+          const increment = item.browserState.progress < 35 ? 9 : item.browserState.progress < 60 ? 5 : 2
+          const progress = Math.min(85, item.browserState.progress + increment)
+          changed = true
+          return {
+            ...item,
+            browserState: {
+              ...item.browserState,
+              progress,
+            },
+          }
+        })
+
+        return changed ? next : current
+      })
+    }, 120)
+
+    return () => window.clearInterval(timer)
   }, [])
 
   useEffect(() => {
@@ -2243,12 +2325,12 @@ function App() {
       return undefined
     }
     const api = desktopApi
-
-    function syncBrowserHost() {
-      const currentActiveWindow = [...windows]
+    function syncBrowserHostNow() {
+      const currentWindows = windowsRef.current
+      const currentActiveWindow = [...currentWindows]
         .filter((item) => !item.minimized)
         .sort((left, right) => right.zIndex - left.zIndex)[0]
-      const safariWindow = [...windows]
+      const safariWindow = [...currentWindows]
         .filter((item) => item.appId === 'safari' && !item.minimized)
         .sort((left, right) => right.zIndex - left.zIndex)[0]
 
@@ -2258,17 +2340,30 @@ function App() {
         !safariWindow.browserState ||
         isSafariHomeUrl(safariWindow.browserState.history[safariWindow.browserState.historyIndex])
       ) {
-        api.browser.hide()
+        if (lastBrowserSyncSignatureRef.current !== 'hidden') {
+          lastBrowserSyncSignatureRef.current = 'hidden'
+          api.browser.hide()
+        }
         return
       }
 
       const host = browserHostRefs.current[safariWindow.id]
       if (!host) {
-        api.browser.hide()
+        if (lastBrowserSyncSignatureRef.current !== 'hidden') {
+          lastBrowserSyncSignatureRef.current = 'hidden'
+          api.browser.hide()
+        }
         return
       }
 
       const rect = host.getBoundingClientRect()
+      const url = safariWindow.browserState.history[safariWindow.browserState.historyIndex]
+      const signature = `${safariWindow.id}:${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${url}`
+      if (signature === lastBrowserSyncSignatureRef.current) {
+        return
+      }
+
+      lastBrowserSyncSignatureRef.current = signature
       api.browser.syncHost({
         visible: true,
         bounds: {
@@ -2277,20 +2372,59 @@ function App() {
           width: rect.width,
           height: rect.height,
         },
-        url: safariWindow.browserState.history[safariWindow.browserState.historyIndex],
+        url,
       })
     }
 
-    const unsubscribe = api.onBrowserSyncRequest(syncBrowserHost)
-    syncBrowserHost()
-    window.addEventListener('resize', syncBrowserHost)
+    function scheduleBrowserHostSync() {
+      if (browserSyncFrameRef.current !== null) {
+        return
+      }
+
+      browserSyncFrameRef.current = window.requestAnimationFrame(() => {
+        browserSyncFrameRef.current = null
+        syncBrowserHostNow()
+      })
+    }
+
+    scheduleBrowserHostSyncRef.current = scheduleBrowserHostSync
+    const unsubscribe = api.onBrowserSyncRequest(scheduleBrowserHostSync)
+    scheduleBrowserHostSync()
+    window.addEventListener('resize', scheduleBrowserHostSync)
 
     return () => {
       unsubscribe()
-      window.removeEventListener('resize', syncBrowserHost)
+      window.removeEventListener('resize', scheduleBrowserHostSync)
+      if (browserSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(browserSyncFrameRef.current)
+        browserSyncFrameRef.current = null
+      }
+      scheduleBrowserHostSyncRef.current = null
+      lastBrowserSyncSignatureRef.current = ''
       api.browser.hide()
     }
-  }, [windows])
+  }, [])
+
+  useEffect(() => {
+    windowsRef.current = windows
+    volumeEntriesByMountRef.current = volumeEntriesByMount
+    loadingVolumeMountsRef.current = loadingVolumeMounts
+    activeSafariWindowIdRef.current = activeSafariWindow?.id ?? null
+  }, [activeSafariWindow?.id, loadingVolumeMounts, volumeEntriesByMount, windows])
+
+  useEffect(() => {
+    lastBrowserSyncSignatureRef.current = ''
+    scheduleBrowserHostSyncRef.current?.()
+  }, [
+    activeSafariWindow?.browserState?.historyIndex,
+    activeSafariWindow?.height,
+    activeSafariWindow?.id,
+    activeSafariWindow?.minimized,
+    activeSafariWindow?.width,
+    activeSafariWindow?.x,
+    activeSafariWindow?.y,
+    activeWindow?.id,
+  ])
 
   useEffect(() => {
     const desktopApi = window.electronDesktop
@@ -2299,28 +2433,67 @@ function App() {
     }
 
     return desktopApi.onBrowserState((payload) => {
-      setWindows((current) =>
-        current.map((item) => {
-          if (item.appId !== 'safari' || !item.browserState) {
+      const targetWindowId = activeSafariWindowIdRef.current
+      if (!targetWindowId) {
+        return
+      }
+
+      const completedWindowIds: string[] = []
+      setWindows((current) => {
+        let changed = false
+        const next = current.map((item) => {
+          if (item.id !== targetWindowId || item.appId !== 'safari' || !item.browserState) {
             return item
           }
 
-          const nextState = { ...item.browserState }
+          const currentState = item.browserState
+          const nextState = { ...currentState }
 
-          if (payload.url && payload.url !== nextState.history[nextState.historyIndex]) {
-            const nextHistory = [...nextState.history.slice(0, nextState.historyIndex + 1), payload.url]
+          if (payload.url && payload.url !== currentState.history[currentState.historyIndex]) {
+            const nextHistory = [...currentState.history.slice(0, currentState.historyIndex + 1), payload.url]
             nextState.history = nextHistory
             nextState.historyIndex = nextHistory.length - 1
             nextState.inputValue = payload.url
+            changed = true
           }
 
-          nextState.loading = !!payload.loading
-          nextState.title = payload.title ?? nextState.title
-          nextState.lastError = payload.lastError ?? null
+          if (payload.loading) {
+            if (!currentState.loading) {
+              nextState.loading = true
+              changed = true
+            }
+          } else {
+            const wasLoading = currentState.loading
+            if (wasLoading) {
+              nextState.loading = false
+              changed = true
+            }
+            if (wasLoading || currentState.progress > 0) {
+              nextState.progress = 100
+              completedWindowIds.push(item.id)
+              changed = true
+            }
+          }
 
-          return { ...item, browserState: nextState }
-        }),
-      )
+          const nextTitle = payload.title ?? currentState.title
+          if (nextTitle !== currentState.title) {
+            nextState.title = nextTitle
+            changed = true
+          }
+
+          const nextError = payload.lastError ?? null
+          if (nextError !== currentState.lastError) {
+            nextState.lastError = nextError
+            changed = true
+          }
+
+          return changed ? { ...item, browserState: nextState } : item
+        })
+
+        return changed ? next : current
+      })
+
+      completedWindowIds.forEach((windowId) => completeBrowserProgressRef.current(windowId, !!payload.lastError))
     })
   }, [])
 
@@ -2345,10 +2518,11 @@ function App() {
     })
 
     requestedTargets.forEach((targetPath) => {
-      if (volumeEntriesByMount[targetPath] || loadingVolumeMounts[targetPath]) {
+      if (volumeEntriesByMountRef.current[targetPath] || loadingVolumeMountsRef.current[targetPath]) {
         return
       }
 
+      loadingVolumeMountsRef.current = { ...loadingVolumeMountsRef.current, [targetPath]: true }
       setLoadingVolumeMounts((current) => ({ ...current, [targetPath]: true }))
 
       const loader = window.electronDesktop
@@ -2362,16 +2536,19 @@ function App() {
 
       void loader
         .then((entries) => {
+          volumeEntriesByMountRef.current = { ...volumeEntriesByMountRef.current, [targetPath]: entries }
           setVolumeEntriesByMount((current) => ({ ...current, [targetPath]: entries }))
         })
         .catch(() => {
+          volumeEntriesByMountRef.current = { ...volumeEntriesByMountRef.current, [targetPath]: [] }
           setVolumeEntriesByMount((current) => ({ ...current, [targetPath]: [] }))
         })
         .finally(() => {
+          loadingVolumeMountsRef.current = { ...loadingVolumeMountsRef.current, [targetPath]: false }
           setLoadingVolumeMounts((current) => ({ ...current, [targetPath]: false }))
         })
     })
-  }, [desktopItems, loadingVolumeMounts, volumeEntriesByMount, windows])
+  }, [desktopItems, windows])
 
   useEffect(() => {
     windows.forEach((item) => {
@@ -2487,13 +2664,6 @@ function App() {
     })
   }, [windows])
 
-  const activeWindow = useMemo(
-    () =>
-      [...windows]
-        .filter((item) => !item.minimized)
-        .sort((left, right) => right.zIndex - left.zIndex)[0],
-    [windows],
-  )
   const activeApp = activeWindow ? getResolvedApp(activeWindow.appId) : getResolvedApp('finder')
   const topZIndex = useMemo(() => windows.reduce((max, item) => Math.max(max, item.zIndex), 0), [windows])
 
@@ -3054,6 +3224,9 @@ function App() {
   function moveDesktopItemToTrash(itemId: string) {
     deleteDesktopItem(itemId)
   }
+
+  moveDesktopItemToFolderRef.current = moveDesktopItemToFolder
+  moveDesktopItemToTrashRef.current = moveDesktopItemToTrash
 
   function importVolumeEntryToDesktop(entry: VolumeEntry, destinationParentId: string | null, position?: { x: number; y: number }) {
     const fallbackPosition = getNextDesktopItemPosition(rootDesktopItems.length)
@@ -4011,6 +4184,97 @@ function App() {
     )
   }
 
+  function clearBrowserProgressReset(windowId: string) {
+    const timer = browserProgressResetTimersRef.current[windowId]
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      delete browserProgressResetTimersRef.current[windowId]
+    }
+  }
+
+  function clearBrowserProgressShow(windowId: string) {
+    const timer = browserProgressShowTimersRef.current[windowId]
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      delete browserProgressShowTimersRef.current[windowId]
+    }
+  }
+
+  function beginBrowserProgress(windowId: string) {
+    clearBrowserProgressReset(windowId)
+    clearBrowserProgressShow(windowId)
+    delete browserProgressVisibleSinceRef.current[windowId]
+    updateBrowserWindow(windowId, (browserState) => ({
+      ...browserState,
+      loading: true,
+      progress: 0,
+      lastError: null,
+    }))
+
+    browserProgressShowTimersRef.current[windowId] = window.setTimeout(() => {
+      delete browserProgressShowTimersRef.current[windowId]
+      browserProgressVisibleSinceRef.current[windowId] = Date.now()
+      updateBrowserWindow(windowId, (browserState) => {
+        if (!browserState.loading) {
+          return browserState
+        }
+
+        return {
+          ...browserState,
+          progress: Math.max(browserState.progress, 14),
+        }
+      })
+    }, BROWSER_PROGRESS_SHOW_DELAY_MS)
+  }
+
+  function completeBrowserProgress(windowId: string, hasError = false) {
+    clearBrowserProgressReset(windowId)
+    const showTimer = browserProgressShowTimersRef.current[windowId]
+    const visibleSince = browserProgressVisibleSinceRef.current[windowId]
+
+    if (showTimer !== undefined && visibleSince === undefined) {
+      clearBrowserProgressShow(windowId)
+      updateBrowserWindow(windowId, (browserState) => ({
+        ...browserState,
+        loading: false,
+        progress: 0,
+      }))
+      return
+    }
+
+    const finalize = () => {
+      browserProgressVisibleSinceRef.current[windowId] = Date.now()
+      updateBrowserWindow(windowId, (browserState) => ({
+        ...browserState,
+        loading: false,
+        progress: 100,
+      }))
+
+      browserProgressResetTimersRef.current[windowId] = window.setTimeout(() => {
+        delete browserProgressResetTimersRef.current[windowId]
+        delete browserProgressVisibleSinceRef.current[windowId]
+        updateBrowserWindow(windowId, (browserState) => ({
+          ...browserState,
+          progress: browserState.loading ? browserState.progress : 0,
+        }))
+      }, hasError ? BROWSER_PROGRESS_HIDE_DELAY_MS + 120 : BROWSER_PROGRESS_HIDE_DELAY_MS)
+    }
+
+    const elapsedVisible = visibleSince ? Date.now() - visibleSince : BROWSER_PROGRESS_MIN_VISIBLE_MS
+    const remainingVisible = Math.max(0, BROWSER_PROGRESS_MIN_VISIBLE_MS - elapsedVisible)
+    if (remainingVisible > 0) {
+      browserProgressResetTimersRef.current[windowId] = window.setTimeout(() => {
+        delete browserProgressResetTimersRef.current[windowId]
+        finalize()
+      }, remainingVisible)
+      return
+    }
+
+    finalize()
+  }
+
+  completeBrowserProgressRef.current = completeBrowserProgress
+
   function updateTerminalWindow(windowId: string, updater: (state: TerminalState) => TerminalState) {
     setWindows((current) =>
       current.map((item) =>
@@ -4222,6 +4486,7 @@ function App() {
 
   function commitBrowserNavigation(windowId: string, rawValue: string) {
     const nextUrl = normalizeBrowserUrl(rawValue)
+    beginBrowserProgress(windowId)
     updateBrowserWindow(windowId, (browserState) => {
       const nextHistory = [...browserState.history.slice(0, browserState.historyIndex + 1), nextUrl]
       return {
@@ -4235,6 +4500,7 @@ function App() {
   }
 
   function moveBrowserHistory(windowId: string, direction: -1 | 1) {
+    beginBrowserProgress(windowId)
     updateBrowserWindow(windowId, (browserState) => {
       const nextIndex = clamp(browserState.historyIndex + direction, 0, browserState.history.length - 1)
       return {
@@ -4252,6 +4518,7 @@ function App() {
   }
 
   function reloadBrowser(windowId: string) {
+    beginBrowserProgress(windowId)
     updateBrowserWindow(windowId, (browserState) => ({
       ...browserState,
       reloadKey: browserState.reloadKey + 1,
@@ -5726,6 +5993,7 @@ function App() {
             }}
           >
             <span className="browser-address-icon" aria-hidden="true">⌕</span>
+            {browserState.progress > 0 ? <span className="browser-loading-spinner" aria-hidden="true" /> : null}
             <input
               className="browser-address-input"
               value={browserState.inputValue}
@@ -5745,16 +6013,24 @@ function App() {
             </button>
             <button
               type="button"
-              className="browser-icon-button"
+              className={`browser-icon-button${browserState.progress > 0 ? ' is-loading' : ''}`}
               onClick={() => reloadBrowser(windowItem.id)}
-              aria-label="Recargar"
-              title="Recargar"
+              aria-label={browserState.progress > 0 ? 'Cargando pagina' : 'Recargar'}
+              title={browserState.progress > 0 ? 'Cargando pagina' : 'Recargar'}
             >
               ↻
             </button>
           </div>
         </div>
         <div className="browser-page browser-page-live">
+          {browserState.progress > 0 && !isHome ? (
+            <div className="browser-progress" aria-hidden="true">
+              <span
+                className={`browser-progress-bar${!browserState.loading && browserState.lastError ? ' error' : ''}`}
+                style={{ width: `${browserState.progress}%` }}
+              />
+            </div>
+          ) : null}
           {!isHome && (browserState.loading || browserState.lastError) ? (
             <div className="browser-meta">
               {browserState.loading ? <span>Cargando pagina...</span> : null}
@@ -6443,6 +6719,7 @@ function App() {
                           }}
                         >
                           <span className="browser-address-icon" aria-hidden="true">⌕</span>
+                          {safariBrowserState.progress > 0 ? <span className="browser-loading-spinner" aria-hidden="true" /> : null}
                           <input
                             className="browser-address-input"
                             value={safariBrowserState.inputValue}
@@ -6463,11 +6740,11 @@ function App() {
                           </button>
                           <button
                             type="button"
-                            className="browser-icon-button"
+                            className={`browser-icon-button${safariBrowserState.progress > 0 ? ' is-loading' : ''}`}
                             onPointerDown={(event) => event.stopPropagation()}
                             onClick={() => reloadBrowser(item.id)}
-                            aria-label="Recargar"
-                            title="Recargar"
+                            aria-label={safariBrowserState.progress > 0 ? 'Cargando pagina' : 'Recargar'}
+                            title={safariBrowserState.progress > 0 ? 'Cargando pagina' : 'Recargar'}
                           >
                             ↻
                           </button>
@@ -6798,7 +7075,7 @@ function App() {
         >
           {visibleDockAppIds.map((appId) => {
             const app = getResolvedApp(appId)
-            const isOpen = windows.some((item) => item.appId === app.id)
+            const isOpen = openAppIds.has(app.id)
             return (
               <DockIconButton
                 key={app.id}
