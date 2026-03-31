@@ -1,9 +1,68 @@
 import path from 'node:path'
-import { createReadStream, promises as fs } from 'node:fs'
+import os from 'node:os'
+import { createReadStream, existsSync, mkdirSync, promises as fs, rmSync, writeFileSync } from 'node:fs'
 import { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron'
-import { executeTerminalCommand, getDeviceInfo, getInstalledApps, getSystemControls, launchApp, listVolumeEntries, setSystemControls } from './system-info.mjs'
+import { executeTerminalCommand, getBootDeviceInfo, getDeviceInfo, getInstalledApps, getSystemControls, launchApp, listVolumeEntries, setSystemControls } from './system-info.mjs'
+
+const sessionStatePath = path.join(app.getPath('userData'), 'session-state.json')
+let safeStartup = false
+let lowEndStartup = false
+
+try {
+  if (existsSync(sessionStatePath)) {
+    const raw = JSON.parse(await fs.readFile(sessionStatePath, 'utf8'))
+    safeStartup = raw?.pending === true
+  }
+} catch {
+  safeStartup = false
+}
+
+function writeSessionState(pending, extra = {}) {
+  try {
+    mkdirSync(path.dirname(sessionStatePath), { recursive: true })
+    writeFileSync(
+      sessionStatePath,
+      JSON.stringify({
+        pending,
+        updatedAt: Date.now(),
+        ...extra,
+      }),
+    )
+  } catch {
+    // Si no puede escribir el marcador, sigue con arranque normal.
+  }
+}
+
+function clearSessionState() {
+  try {
+    rmSync(sessionStatePath, { force: true })
+  } catch {
+    // Ignora errores de limpieza al salir.
+  }
+}
+
+function detectLowEndStartupProfile() {
+  const totalMemoryGb = os.totalmem() / 1024 / 1024 / 1024
+  const cpuCount = os.cpus().length
+
+  return totalMemoryGb <= 8 || cpuCount <= 4
+}
+
+lowEndStartup = detectLowEndStartupProfile()
+writeSessionState(true, { reason: 'launching' })
+
+if (process.platform === 'win32' && !safeStartup && !lowEndStartup && process.env.MACTORNO_FORCE_HIGH_PERFORMANCE_GPU === '1') {
+  // Solo fuerza la GPU dedicada cuando se pide explicitamente.
+  app.commandLine.appendSwitch('force_high_performance_gpu')
+}
+
+if (safeStartup || lowEndStartup) {
+  app.disableHardwareAcceleration()
+  app.commandLine.appendSwitch('disable-gpu')
+  app.commandLine.appendSwitch('disable-gpu-compositing')
+}
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled')
 app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer')
@@ -18,6 +77,8 @@ let browserVisible = false
 let currentBrowserUrl = ''
 let browserSyncRequestTimer = null
 let browserAppearance = 'classic'
+let safeStartupClearTimer = null
+let mainWindowRecoveryAttempts = 0
 const desktopUserAgent = (() => {
   const chromeVersion = process.versions.chrome
   return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeVersion} Safari/537.36`
@@ -33,9 +94,13 @@ function getMediaMimeType(targetPath) {
   const extension = path.extname(targetPath).toLowerCase()
   switch (extension) {
     case '.png':
+    case '.apng':
       return 'image/png'
     case '.jpg':
     case '.jpeg':
+    case '.jfif':
+    case '.pjpeg':
+    case '.pjp':
       return 'image/jpeg'
     case '.gif':
       return 'image/gif'
@@ -47,7 +112,10 @@ function getMediaMimeType(targetPath) {
       return 'image/svg+xml'
     case '.avif':
       return 'image/avif'
+    case '.ico':
+      return 'image/x-icon'
     case '.mp4':
+    case '.m4v':
       return 'video/mp4'
     case '.webm':
       return 'video/webm'
@@ -57,8 +125,23 @@ function getMediaMimeType(targetPath) {
       return 'video/x-matroska'
     case '.avi':
       return 'video/x-msvideo'
-    case '.m4v':
-      return 'video/x-m4v'
+    case '.ogv':
+    case '.ogm':
+      return 'video/ogg'
+    case '.mpeg':
+    case '.mpg':
+    case '.mpe':
+    case '.mpv':
+    case '.m2v':
+      return 'video/mpeg'
+    case '.ts':
+    case '.mts':
+    case '.m2ts':
+      return 'video/mp2t'
+    case '.3gp':
+      return 'video/3gpp'
+    case '.3g2':
+      return 'video/3gpp2'
     default:
       return 'application/octet-stream'
   }
@@ -113,14 +196,14 @@ function navigateBrowserWindow(targetWindow, url) {
 }
 
 function emitBrowserState() {
-  if (!mainWindow) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
     return
   }
   mainWindow.webContents.send('browser:state', browserState)
 }
 
 function emitBrowserSyncRequest() {
-  if (!mainWindow) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
     return
   }
 
@@ -279,6 +362,45 @@ function attachBrowserWindowEvents(targetWindow) {
       emitBrowserState()
     },
   )
+
+  targetWindow.webContents.on('render-process-gone', (_event, details) => {
+    browserState = {
+      ...browserState,
+      loading: false,
+      lastError:
+        details?.reason === 'oom'
+          ? 'El navegador integrado se desactivo por falta de memoria. Usa el enlace externo o reinicia la app.'
+          : 'El navegador integrado se reiniciara porque el proceso web se cerro.',
+    }
+    emitBrowserState()
+
+    hideBrowserWindow()
+    if (browserWindow && !browserWindow.isDestroyed()) {
+      browserWindow.destroy()
+    }
+    browserWindow = null
+    writeSessionState(true, { reason: `browser-${details?.reason ?? 'gone'}` })
+  })
+}
+
+function handleMainRendererFailure(details) {
+  writeSessionState(true, { reason: `renderer-${details?.reason ?? 'gone'}` })
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return
+  }
+
+  if (mainWindowRecoveryAttempts >= 1) {
+    mainWindow.close()
+    return
+  }
+
+  mainWindowRecoveryAttempts += 1
+  const previousBounds = mainWindow.getBounds()
+  mainWindow.destroy()
+  mainWindow = null
+
+  createWindow(previousBounds)
 }
 
 function ensureBrowserWindow() {
@@ -330,10 +452,12 @@ function hideBrowserWindow() {
   browserWindow.hide()
 }
 
-function createWindow() {
+function createWindow(initialBounds = null) {
   mainWindow = new BrowserWindow({
-    width: 1480,
-    height: 920,
+    width: initialBounds?.width ?? 1480,
+    height: initialBounds?.height ?? 920,
+    x: initialBounds?.x,
+    y: initialBounds?.y,
     minWidth: 1100,
     minHeight: 720,
     show: false,
@@ -344,6 +468,7 @@ function createWindow() {
     title: 'Mactorno',
     webPreferences: {
       preload: path.join(__dirname, 'preload.mjs'),
+      sandbox: false,
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -380,12 +505,32 @@ function createWindow() {
   })
 
   mainWindow.on('closed', () => {
+    if (safeStartupClearTimer !== null) {
+      clearTimeout(safeStartupClearTimer)
+      safeStartupClearTimer = null
+    }
     if (browserSyncRequestTimer !== null) {
       clearTimeout(browserSyncRequestTimer)
       browserSyncRequestTimer = null
     }
     mainWindow = null
     browserWindow = null
+  })
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    handleMainRendererFailure(details)
+  })
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindowRecoveryAttempts = 0
+    if (safeStartupClearTimer !== null) {
+      clearTimeout(safeStartupClearTimer)
+    }
+
+    safeStartupClearTimer = setTimeout(() => {
+      safeStartupClearTimer = null
+      clearSessionState()
+    }, 15000)
   })
 }
 
@@ -443,9 +588,10 @@ app.whenReady().then(() => {
 
   createWindow()
 
+  ipcMain.handle('device-info:boot', async () => getBootDeviceInfo())
   ipcMain.handle('device-info:get', async () => getDeviceInfo())
-  ipcMain.handle('apps:list', async () => getInstalledApps())
-  ipcMain.handle('volumes:list-entries', async (_event, target) => listVolumeEntries(target))
+  ipcMain.handle('apps:list', async (_event, payload) => getInstalledApps(payload))
+  ipcMain.handle('volumes:list-entries', async (_event, payload) => listVolumeEntries(payload))
   ipcMain.handle('system-controls:get', async () => getSystemControls())
   ipcMain.handle('system-controls:set', async (_event, payload) => setSystemControls(payload))
   ipcMain.handle('terminal:execute', async (_event, payload) => executeTerminalCommand(payload.command, payload.cwd))
@@ -467,8 +613,11 @@ app.whenReady().then(() => {
       properties: ['openFile'],
       filters:
         kind === 'video'
-          ? [{ name: 'Videos', extensions: ['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'] }]
-          : [{ name: 'Imagenes', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'] }],
+          ? [{
+              name: 'Videos',
+              extensions: ['mp4', 'm4v', 'webm', 'mov', 'mkv', 'avi', 'ogv', 'ogm', 'mpeg', 'mpg', 'mpe', 'mpv', 'm2v', 'ts', 'mts', 'm2ts', '3gp', '3g2'],
+            }]
+          : [{ name: 'Imagenes', extensions: ['png', 'jpg', 'jpeg', 'jfif', 'pjpeg', 'pjp', 'gif', 'webp', 'bmp', 'svg', 'avif', 'apng', 'ico'] }],
     })
 
     if (result.canceled || !result.filePaths[0]) {
@@ -577,10 +726,25 @@ app.whenReady().then(() => {
       createWindow()
     }
   })
+
+  app.on('child-process-gone', (_event, details) => {
+    if (details?.type === 'GPU') {
+      writeSessionState(true, { reason: `gpu-${details.reason ?? 'gone'}` })
+    }
+  })
 })
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  if (safeStartupClearTimer !== null) {
+    clearTimeout(safeStartupClearTimer)
+    safeStartupClearTimer = null
+  }
+
+  clearSessionState()
 })

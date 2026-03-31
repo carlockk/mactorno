@@ -109,7 +109,7 @@ async function getSystemWallpapers() {
   }
 }
 
-const APPS_CACHE_TTL_MS = 5 * 60 * 1000
+const APPS_CACHE_TTL_MS = 15 * 1000
 const DEVICE_INFO_CACHE_TTL_MS = 15 * 1000
 const SYSTEM_CONTROLS_CACHE_TTL_MS = 5 * 1000
 const SHORTCUT_CACHE_TTL_MS = 5 * 60 * 1000
@@ -117,8 +117,10 @@ const ICON_CACHE_TTL_MS = 5 * 60 * 1000
 const VOLUME_ENTRIES_CACHE_TTL_MS = 10 * 1000
 
 const appsCache = { expiresAt: 0, value: undefined, pending: undefined }
+const appsLiteCache = { expiresAt: 0, value: undefined, pending: undefined }
 const deviceInfoCache = { expiresAt: 0, value: undefined, pending: undefined }
 const systemControlsCache = { expiresAt: 0, value: undefined, pending: undefined }
+const startMenuShortcutsCache = { expiresAt: 0, value: undefined, pending: undefined }
 const shortcutCache = new Map()
 const iconDataCache = new Map()
 const volumeEntriesCache = new Map()
@@ -208,6 +210,21 @@ function uniqueApps(items) {
   return [...map.values()].sort((left, right) => left.name.localeCompare(right.name))
 }
 
+function normalizeAppLookupName(name) {
+  return String(name || '')
+    .toLowerCase()
+    .replace(/\.(lnk|url|exe)$/i, '')
+    .replace(/[^a-z0-9]+/g, '')
+}
+
+function isIgnoredWindowsAppName(name) {
+  if (!name) {
+    return true
+  }
+
+  return /uninstall|desinstalar|remove|repair|setup|installer|installshield|update helper|crash handler/i.test(name)
+}
+
 function normalizeExecTarget(value) {
   return value
     .replace(/%.?/g, '')
@@ -221,7 +238,21 @@ function shouldExtractEntryIcon(entry) {
     return false
   }
 
-  return ['.exe', '.lnk', '.url'].includes(entry.extension.toLowerCase())
+  return [
+    '.exe',
+    '.lnk',
+    '.url',
+    '.pdf',
+    '.doc',
+    '.docx',
+    '.rtf',
+    '.txt',
+    '.xls',
+    '.xlsx',
+    '.csv',
+    '.ppt',
+    '.pptx',
+  ].includes(entry.extension.toLowerCase())
 }
 
 function fileToDataUrl(filePath) {
@@ -483,7 +514,200 @@ function getWindowsSystemApps() {
     .filter(Boolean)
 }
 
-async function getWindowsApps() {
+function parseWindowsIconLocation(value = '') {
+  const rawPath = String(value || '').split(',')[0]?.trim().replace(/^"+|"+$/g, '')
+  if (!rawPath) {
+    return ''
+  }
+
+  return fs.existsSync(rawPath) ? rawPath : ''
+}
+
+function findLaunchableExeInDirectory(dirPath) {
+  if (!dirPath || !fs.existsSync(dirPath)) {
+    return ''
+  }
+
+  const candidates = walkFiles(dirPath, 1).filter((filePath) => path.extname(filePath).toLowerCase() === '.exe')
+  const ranked = candidates
+    .filter((filePath) => !isIgnoredWindowsAppName(path.basename(filePath, '.exe')))
+    .sort((left, right) => {
+      const leftName = path.basename(left, '.exe').toLowerCase()
+      const rightName = path.basename(right, '.exe').toLowerCase()
+      return leftName.localeCompare(rightName)
+    })
+
+  return ranked[0] ?? ''
+}
+
+async function getWindowsStartAppsCatalog() {
+  const output = await runCommand('powershell.exe', [
+    '-NoProfile',
+    '-Command',
+    'Get-StartApps | Sort-Object Name | Select-Object Name,AppID | ConvertTo-Json -Compress',
+  ])
+
+  try {
+    const raw = JSON.parse(output)
+    const items = Array.isArray(raw) ? raw : raw ? [raw] : []
+    return items
+      .filter((item) => item?.Name && item?.AppID && !isIgnoredWindowsAppName(item.Name))
+      .map((item) => ({
+        id: Buffer.from(`startapp:${item.AppID}`).toString('base64url'),
+        name: item.Name.trim(),
+        target: `shell:AppsFolder\\${item.AppID}`,
+        launchTarget: `shell:AppsFolder\\${item.AppID}`,
+        source: 'start-apps',
+        icon: null,
+      }))
+  } catch {
+    return []
+  }
+}
+
+async function getWindowsStartMenuShortcuts() {
+  return getCachedValue(startMenuShortcutsCache, SHORTCUT_CACHE_TTL_MS, async () => {
+    const locations = [
+      path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+      path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+    ]
+
+    const shortcuts = []
+    for (const location of locations) {
+      for (const filePath of walkFiles(location, 6)) {
+        const extension = path.extname(filePath).toLowerCase()
+        if (!['.lnk', '.url'].includes(extension)) {
+          continue
+        }
+
+        const name = path.basename(filePath, extension).replace(/[-_]+/g, ' ').trim()
+        if (!name || isIgnoredWindowsAppName(name)) {
+          continue
+        }
+
+        shortcuts.push({
+          filePath,
+          name,
+          normalizedName: normalizeAppLookupName(name),
+        })
+      }
+    }
+
+    return shortcuts
+  })
+}
+
+async function findWindowsStartMenuShortcutByName(name) {
+  const normalizedName = normalizeAppLookupName(name)
+  if (!normalizedName) {
+    return null
+  }
+
+  const shortcuts = await getWindowsStartMenuShortcuts()
+  const exactMatch = shortcuts.find((item) => item.normalizedName === normalizedName)
+  if (exactMatch) {
+    return exactMatch
+  }
+
+  return shortcuts.find((item) =>
+    item.normalizedName.includes(normalizedName) || normalizedName.includes(item.normalizedName),
+  ) ?? null
+}
+
+async function resolveWindowsAppIcon(app, timeoutMs) {
+  const extension = path.extname(app.target).toLowerCase()
+
+  if (extension === '.lnk') {
+    const shortcut = await withTimeout(resolveWindowsShortcut(app.target), timeoutMs)
+    const target = shortcut?.TargetPath || app.target
+    const icon = await withTimeout(extractWindowsIconData(target, shortcut?.IconLocation ?? ''), timeoutMs)
+    return { ...app, target, launchTarget: app.target, icon }
+  }
+
+  if (extension === '.url') {
+    const shortcut = parseInternetShortcut(app.target)
+    const target = shortcut.url || app.target
+    const icon = shortcut.iconFile
+      ? await withTimeout(extractWindowsIconData(target, shortcut.iconFile), timeoutMs)
+      : null
+    return { ...app, target, launchTarget: target, icon }
+  }
+
+  if (extension === '.exe') {
+    const icon = await withTimeout(extractWindowsIconData(app.target), timeoutMs)
+    return { ...app, launchTarget: app.target, icon }
+  }
+
+  if (/^shell:appsfolder\\/i.test(app.target)) {
+    const shortcut = await withTimeout(findWindowsStartMenuShortcutByName(app.name), timeoutMs)
+    if (!shortcut?.filePath) {
+      return app
+    }
+
+    const shortcutInfo = await withTimeout(resolveWindowsShortcut(shortcut.filePath), timeoutMs)
+    const icon = await withTimeout(
+      extractWindowsIconData(shortcutInfo?.TargetPath || shortcut.filePath, shortcutInfo?.IconLocation ?? ''),
+      timeoutMs,
+    )
+
+    return icon ? { ...app, icon } : app
+  }
+
+  return app
+}
+
+async function getWindowsRegistryApps() {
+  const script = `
+$roots = @(
+  'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+  'HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+  'HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*'
+)
+
+$items = foreach ($root in $roots) {
+  if (Test-Path $root) {
+    Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
+      Select-Object DisplayName,DisplayIcon,InstallLocation,SystemComponent,ReleaseType,ParentDisplayName
+  }
+}
+
+$items | ConvertTo-Json -Compress
+`
+
+  const output = await runCommand('powershell.exe', ['-NoProfile', '-Command', script])
+
+  try {
+    const raw = JSON.parse(output)
+    const items = Array.isArray(raw) ? raw : raw ? [raw] : []
+    return items
+      .filter((item) => item?.DisplayName && !item?.SystemComponent && !item?.ParentDisplayName && !item?.ReleaseType)
+      .filter((item) => !isIgnoredWindowsAppName(item.DisplayName))
+      .map((item) => {
+        const iconTarget = parseWindowsIconLocation(item.DisplayIcon)
+        const installTarget = findLaunchableExeInDirectory(item.InstallLocation)
+        const launchTarget =
+          installTarget || (path.extname(iconTarget).toLowerCase() === '.exe' ? iconTarget : '')
+        if (!launchTarget) {
+          return null
+        }
+
+        return {
+          id: Buffer.from(`registry:${item.DisplayName}::${launchTarget}`).toString('base64url'),
+          name: String(item.DisplayName).trim(),
+          target: launchTarget,
+          launchTarget,
+          source: 'registry',
+          icon: null,
+        }
+      })
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+async function getWindowsApps(options = {}) {
+  const lite = options?.lite === true
   const locations = [
     path.join(process.env.ProgramData ?? 'C:\\ProgramData', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
     path.join(process.env.APPDATA ?? '', 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
@@ -491,15 +715,19 @@ async function getWindowsApps() {
 
   const apps = []
   apps.push(...getWindowsSystemApps())
+  apps.push(...(await getWindowsStartAppsCatalog()))
+  if (!lite) {
+    apps.push(...(await getWindowsRegistryApps()))
+  }
   for (const location of locations) {
-    for (const filePath of walkFiles(location, 3)) {
+    for (const filePath of walkFiles(location, 6)) {
       const extension = path.extname(filePath).toLowerCase()
       if (!['.lnk', '.url', '.exe'].includes(extension)) {
         continue
       }
 
       const name = path.basename(filePath, extension).replace(/[-_]+/g, ' ').trim()
-      if (!name || /uninstall|desinstalar|remove|repair|update/i.test(name)) {
+      if (isIgnoredWindowsAppName(name)) {
         continue
       }
 
@@ -514,12 +742,12 @@ async function getWindowsApps() {
     }
   }
 
-  const portableDirs = [
-    { dir: path.join(process.env.USERPROFILE ?? os.homedir(), 'Desktop'), depth: 2, source: 'desktop-portable' },
-    { dir: path.join(process.env.USERPROFILE ?? os.homedir(), 'Downloads'), depth: 2, source: 'downloads-portable' },
-    { dir: process.env.ProgramFiles ?? 'C:\\Program Files', depth: 2, source: 'program-files' },
-    { dir: process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)', depth: 2, source: 'program-files-x86' },
-  ]
+  const portableDirs = lite
+    ? []
+    : [
+        { dir: path.join(process.env.USERPROFILE ?? os.homedir(), 'Desktop'), depth: 2, source: 'desktop-portable' },
+        { dir: path.join(process.env.USERPROFILE ?? os.homedir(), 'Downloads'), depth: 2, source: 'downloads-portable' },
+      ]
 
   for (const location of portableDirs) {
     if (!location.dir || !fs.existsSync(location.dir)) {
@@ -556,40 +784,22 @@ async function getWindowsApps() {
     }
   }
 
-  const baseApps = uniqueApps(apps).slice(0, 180)
+  const baseApps = uniqueApps(apps)
+  if (lite) {
+    return baseApps.slice(0, 180)
+  }
+
   const enrichedApps = await Promise.all(
     baseApps.map(async (app, index) => {
-      if (index >= 48) {
+      if (index >= 180) {
         return app
       }
 
-      const extension = path.extname(app.target).toLowerCase()
       try {
-        if (extension === '.lnk') {
-          const shortcut = await withTimeout(resolveWindowsShortcut(app.target), 350)
-          const target = shortcut?.TargetPath || app.target
-          const icon = await withTimeout(extractWindowsIconData(target, shortcut?.IconLocation ?? ''), 350)
-          return { ...app, target, launchTarget: app.target, icon }
-        }
-
-        if (extension === '.url') {
-          const shortcut = parseInternetShortcut(app.target)
-          const target = shortcut.url || app.target
-          const icon = shortcut.iconFile
-            ? await withTimeout(extractWindowsIconData(target, shortcut.iconFile), 350)
-            : null
-          return { ...app, target, launchTarget: target, icon }
-        }
-
-        if (extension === '.exe') {
-          const icon = await withTimeout(extractWindowsIconData(app.target), 350)
-          return { ...app, launchTarget: app.target, icon }
-        }
+        return await resolveWindowsAppIcon(app, 350)
       } catch {
         return app
       }
-
-      return app
     }),
   )
 
@@ -604,14 +814,14 @@ function getWindowsAppsFallback() {
 
   const apps = [...getWindowsSystemApps()]
   for (const location of locations) {
-    for (const filePath of walkFiles(location, 3)) {
+    for (const filePath of walkFiles(location, 6)) {
       const extension = path.extname(filePath).toLowerCase()
       if (!['.lnk', '.url', '.exe'].includes(extension)) {
         continue
       }
 
       const name = path.basename(filePath, extension).replace(/[-_]+/g, ' ').trim()
-      if (!name || /uninstall|desinstalar|remove|repair|update/i.test(name)) {
+      if (isIgnoredWindowsAppName(name)) {
         continue
       }
 
@@ -626,7 +836,7 @@ function getWindowsAppsFallback() {
     }
   }
 
-  return uniqueApps(apps).slice(0, 180)
+  return uniqueApps(apps)
 }
 
 function getMacApps() {
@@ -694,12 +904,15 @@ function getLinuxApps() {
   return uniqueApps(apps).slice(0, 120)
 }
 
-export async function getInstalledApps() {
-  return getCachedValue(appsCache, APPS_CACHE_TTL_MS, async () => {
+export async function getInstalledApps(options = {}) {
+  const lite = options?.lite === true
+  const cache = lite ? appsLiteCache : appsCache
+
+  return getCachedValue(cache, APPS_CACHE_TTL_MS, async () => {
     switch (process.platform) {
       case 'win32':
         try {
-          const apps = await getWindowsApps()
+          const apps = await getWindowsApps({ lite })
           return apps.length > 0 ? apps : getWindowsAppsFallback()
         } catch {
           return getWindowsAppsFallback()
@@ -710,6 +923,24 @@ export async function getInstalledApps() {
         return getLinuxApps()
     }
   })
+}
+
+function normalizeVolumeRequest(payload) {
+  if (typeof payload === 'string') {
+    return {
+      target: payload,
+      offset: 0,
+      limit: 200,
+      lite: false,
+    }
+  }
+
+  return {
+    target: payload?.target ?? '',
+    offset: Math.max(0, Number(payload?.offset) || 0),
+    limit: Math.max(1, Math.min(200, Number(payload?.limit) || 200)),
+    lite: payload?.lite === true,
+  }
 }
 
 function normalizeVolumePath(target) {
@@ -728,15 +959,16 @@ function normalizeVolumePath(target) {
   return target.trim()
 }
 
-export async function listVolumeEntries(target) {
-  const volumePath = normalizeVolumePath(target)
+export async function listVolumeEntries(payload) {
+  const request = normalizeVolumeRequest(payload)
+  const volumePath = normalizeVolumePath(request.target)
   if (!volumePath) {
-    return []
+    return { entries: [], total: 0, nextOffset: null, hasMore: false }
   }
 
-  return getKeyedCachedValue(volumeEntriesCache, volumePath.toLowerCase(), VOLUME_ENTRIES_CACHE_TTL_MS, async () => {
+  const baseEntries = await getKeyedCachedValue(volumeEntriesCache, volumePath.toLowerCase(), VOLUME_ENTRIES_CACHE_TTL_MS, async () => {
     try {
-      const baseEntries = safeReadDir(volumePath)
+      return safeReadDir(volumePath)
         .map((entry) => {
           const fullPath = path.join(volumePath, entry.name)
           let sizeBytes = null
@@ -764,49 +996,64 @@ export async function listVolumeEntries(target) {
           }
           return left.name.localeCompare(right.name)
         })
-        .slice(0, 200)
-
-      if (process.platform !== 'win32') {
-        return baseEntries
-      }
-
-      let iconBudget = 0
-      return Promise.all(
-        baseEntries.map(async (entry) => {
-          if (!shouldExtractEntryIcon(entry) || iconBudget >= 24) {
-            return entry
-          }
-
-          iconBudget += 1
-
-          try {
-            if (entry.extension === '.lnk') {
-              const shortcut = await withTimeout(resolveWindowsShortcut(entry.path), 250)
-              const targetPath = shortcut?.TargetPath || entry.path
-              const icon = await withTimeout(extractWindowsIconData(targetPath, shortcut?.IconLocation ?? ''), 250)
-              return { ...entry, icon }
-            }
-
-            if (entry.extension === '.url') {
-              const shortcut = parseInternetShortcut(entry.path)
-              const targetPath = shortcut.url || entry.path
-              const icon = shortcut.iconFile
-                ? await withTimeout(extractWindowsIconData(targetPath, shortcut.iconFile), 250)
-                : null
-              return { ...entry, icon }
-            }
-
-            const icon = await withTimeout(extractWindowsIconData(entry.path), 250)
-            return { ...entry, icon }
-          } catch {
-            return entry
-          }
-        }),
-      )
     } catch {
       return []
     }
   })
+
+  const pagedEntries = baseEntries.slice(request.offset, request.offset + request.limit)
+  if (process.platform !== 'win32') {
+    return {
+      entries: pagedEntries,
+      total: baseEntries.length,
+      nextOffset: request.offset + pagedEntries.length < baseEntries.length ? request.offset + pagedEntries.length : null,
+      hasMore: request.offset + pagedEntries.length < baseEntries.length,
+    }
+  }
+
+  let iconBudget = 0
+  const iconBudgetLimit = request.lite ? 8 : 24
+  const iconTimeoutMs = request.lite ? 120 : 250
+
+  const entries = await Promise.all(
+    pagedEntries.map(async (entry) => {
+      if (!shouldExtractEntryIcon(entry) || iconBudget >= iconBudgetLimit) {
+        return entry
+      }
+
+      iconBudget += 1
+
+      try {
+        if (entry.extension === '.lnk') {
+          const shortcut = await withTimeout(resolveWindowsShortcut(entry.path), iconTimeoutMs)
+          const targetPath = shortcut?.TargetPath || entry.path
+          const icon = await withTimeout(extractWindowsIconData(targetPath, shortcut?.IconLocation ?? ''), iconTimeoutMs)
+          return { ...entry, icon }
+        }
+
+        if (entry.extension === '.url') {
+          const shortcut = parseInternetShortcut(entry.path)
+          const targetPath = shortcut.url || entry.path
+          const icon = shortcut.iconFile
+            ? await withTimeout(extractWindowsIconData(targetPath, shortcut.iconFile), iconTimeoutMs)
+            : null
+          return { ...entry, icon }
+        }
+
+        const icon = await withTimeout(extractWindowsIconData(entry.path), iconTimeoutMs)
+        return { ...entry, icon }
+      } catch {
+        return entry
+      }
+    }),
+  )
+
+  return {
+    entries,
+    total: baseEntries.length,
+    nextOffset: request.offset + pagedEntries.length < baseEntries.length ? request.offset + pagedEntries.length : null,
+    hasMore: request.offset + pagedEntries.length < baseEntries.length,
+  }
 }
 
 function runCommand(command, args) {
@@ -858,9 +1105,34 @@ async function getVolumes() {
   })
 }
 
+async function getGraphicsInfo() {
+  if (process.platform === 'win32') {
+    const output = await runCommand('powershell.exe', [
+      '-NoProfile',
+      '-Command',
+      "Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM | Sort-Object AdapterRAM -Descending | ConvertTo-Json -Compress",
+    ])
+
+    try {
+      const raw = JSON.parse(output)
+      const items = Array.isArray(raw) ? raw : raw ? [raw] : []
+      const primary = items.find((item) => item?.Name) ?? null
+      return {
+        gpuModel: primary?.Name ?? null,
+        videoMemoryMb: primary?.AdapterRAM ? Math.round(Number(primary.AdapterRAM) / (1024 * 1024)) : null,
+      }
+    } catch {
+      return { gpuModel: null, videoMemoryMb: null }
+    }
+  }
+
+  return { gpuModel: null, videoMemoryMb: null }
+}
+
 export async function getDeviceInfo() {
   return getCachedValue(deviceInfoCache, DEVICE_INFO_CACHE_TTL_MS, async () => {
     const cpus = os.cpus()
+    const graphicsInfo = await getGraphicsInfo()
     return {
       hostname: os.hostname(),
       osName: os.platform() === 'win32' ? 'Windows' : os.platform() === 'darwin' ? 'macOS' : 'Linux',
@@ -876,10 +1148,37 @@ export async function getDeviceInfo() {
       homeDir: os.homedir(),
       userName: os.userInfo().username,
       userAvatar: await getUserAvatar(),
+      gpuModel: graphicsInfo.gpuModel,
+      videoMemoryMb: graphicsInfo.videoMemoryMb,
       systemWallpapers: await getSystemWallpapers(),
       volumes: await getVolumes(),
     }
   })
+}
+
+export async function getBootDeviceInfo() {
+  const cpus = os.cpus()
+  const graphicsInfo = await getGraphicsInfo()
+  return {
+    hostname: os.hostname(),
+    osName: os.platform() === 'win32' ? 'Windows' : os.platform() === 'darwin' ? 'macOS' : 'Linux',
+    platform: os.platform(),
+    release: os.release(),
+    version: os.version(),
+    arch: os.arch(),
+    cpuModel: cpus[0]?.model ?? 'Unknown CPU',
+    cpuCount: cpus.length,
+    totalMemoryGb: toGb(os.totalmem()),
+    freeMemoryGb: toGb(os.freemem()),
+    uptimeHours: (os.uptime() / 3600).toFixed(1),
+    homeDir: os.homedir(),
+    userName: os.userInfo().username,
+    userAvatar: await getUserAvatar(),
+    gpuModel: graphicsInfo.gpuModel,
+    videoMemoryMb: graphicsInfo.videoMemoryMb,
+    systemWallpapers: [],
+    volumes: [],
+  }
 }
 
 async function getWindowsBrightness() {
@@ -1078,6 +1377,24 @@ export async function launchApp(target) {
   }
 
   if (process.platform === 'win32') {
+    if (/^shell:/i.test(target)) {
+      const escapedTarget = target.replace(/'/g, "''")
+      const child = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-Command', `Start-Process '${escapedTarget}'`],
+        { detached: true, stdio: 'ignore' },
+      )
+      child.unref()
+      return new Promise((resolve) => {
+        child.on('error', (error) => {
+          resolve({ ok: false, error: error.message })
+        })
+        child.on('spawn', () => {
+          resolve({ ok: true, error: null })
+        })
+      })
+    }
+
     if (!fs.existsSync(target)) {
       return { ok: false, error: `La ruta no existe o no esta disponible: ${target}` }
     }

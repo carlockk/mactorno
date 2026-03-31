@@ -10,9 +10,10 @@ type ElectronBrowserHostPayload = {
 }
 
 type ElectronDesktopApi = {
+  getBootDeviceInfo: () => Promise<unknown>
   getDeviceInfo: () => Promise<unknown>
-  getInstalledApps: () => Promise<unknown>
-  listVolumeEntries: (target: string) => Promise<unknown>
+  getInstalledApps: (payload?: { lite?: boolean }) => Promise<unknown>
+  listVolumeEntries: (payload: { target: string; offset?: number; limit?: number; lite?: boolean }) => Promise<unknown>
   getSystemControls: () => Promise<unknown>
   setSystemControls: (payload: { brightness?: number; volume?: number }) => Promise<unknown>
   pickMediaFile: (kind: 'photo' | 'video') => Promise<{ path: string; name: string } | null>

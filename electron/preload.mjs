@@ -1,9 +1,10 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 contextBridge.exposeInMainWorld('electronDesktop', {
+  getBootDeviceInfo: () => ipcRenderer.invoke('device-info:boot'),
   getDeviceInfo: () => ipcRenderer.invoke('device-info:get'),
-  getInstalledApps: () => ipcRenderer.invoke('apps:list'),
-  listVolumeEntries: (target) => ipcRenderer.invoke('volumes:list-entries', target),
+  getInstalledApps: (payload) => ipcRenderer.invoke('apps:list', payload),
+  listVolumeEntries: (payload) => ipcRenderer.invoke('volumes:list-entries', payload),
   getSystemControls: () => ipcRenderer.invoke('system-controls:get'),
   setSystemControls: (payload) => ipcRenderer.invoke('system-controls:set', payload),
   pickMediaFile: (kind) => ipcRenderer.invoke('media:pick-file', kind),

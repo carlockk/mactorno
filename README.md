@@ -26,7 +26,19 @@ npm run dev:desktop
 
 This project is configured to package as a Windows desktop app with `electron-builder`.
 
-Create Windows distributables:
+Create the portable Windows executable:
+
+```bash
+npm run dist:portable
+```
+
+Create the Windows installer:
+
+```bash
+npm run dist:installer
+```
+
+Create both Windows distributables:
 
 ```bash
 npm run dist:win
@@ -39,6 +51,12 @@ npm run pack:win
 ```
 
 Build output is written to `release/`.
+
+### Windows Trust Warning
+
+The generated `.exe` does not require Node.js on the target machine.
+
+Windows SmartScreen or "unknown publisher" warnings can still appear until the app is signed with a real code-signing certificate. Packaging alone does not remove that warning.
 
 ## Product Direction
 

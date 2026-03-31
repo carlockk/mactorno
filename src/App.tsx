@@ -1,345 +1,55 @@
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 import {
   AnimatePresence,
   motion,
   useMotionValue,
-  useSpring,
-  useTransform,
-  type MotionValue,
 } from 'motion/react'
 import loginWallpaperSvg from './assets/login-wallpaper.svg'
+import { FinderApplicationsPanel, FinderCard, FinderDesktopPanel, FinderFileTile, FinderListHeader, FinderSidebar, FinderVolumePanel } from './app/components/finder'
+import { DockIconButton, PhotoViewer, VideoPlayer } from './app/components/media-and-dock'
+import { AboutPanel, DisplayPanel, LauncherPanel, LauncherPopup } from './app/components/system-panels'
+import { VideoThumbnail } from './app/components/video-thumbnail'
+import { getApp, getDesktopVolumeIconSrc, getDesktopVolumeKind, getDocumentPreviewIcon, getFinderLabel, getMediaSource, getPathLeaf, getVolumeMountFromRoute, getVolumePathFromRoute, isImageEntry, isVideoEntry, normalizeIconSpec, parseVolumeEntryPayload, readIconFile, renderDockIconContent, renderInstalledAppIcon, resolvePublicAssetPath, serializeVolumeEntryPayload } from './app/helpers'
+import { useDock } from './app/hooks/useDock'
+import { useFinder } from './app/hooks/useFinder'
+import { useSystemData } from './app/hooks/useSystemData'
+import type {
+  AppId,
+  AppMenuAction,
+  BrowserState,
+  BrowserTab,
+  CalculatorState,
+  ContextMenuState,
+  CustomDockItem,
+  DesktopApp,
+  DesktopItem,
+  DesktopItemDragState,
+  DesktopTrashDragState,
+  DesktopVolumeDragState,
+  DockIconSpec,
+  DragState,
+  FinderRoute,
+  FinderSortMode,
+  FinderState,
+  FinderTab,
+  FinderViewMode,
+  InstalledApp,
+  NoteItem,
+  PhotoViewState,
+  RectState,
+  ResizeState,
+  SystemControlPatch,
+  SystemControlsState,
+  TerminalState,
+  VolumeEntry,
+  VolumeInfo,
+  WallpaperPreset,
+  WallpaperSelection,
+  WindowState,
+} from './app/types'
 import './App.css'
 
-type AppId = 'finder' | 'notes' | 'textedit' | 'safari' | 'terminal' | 'launcher' | 'calculator' | 'photos' | 'videos' | 'display' | 'about' | 'docksettings'
-type FinderRoute = 'computer' | 'desktop' | 'trash' | 'device' | 'applications' | 'dock' | 'display' | `volume:${string}` | `desktop-folder:${string}`
-type RectState = { x: number; y: number; width: number; height: number }
-
-type DesktopApp = {
-  id: AppId
-  name: string
-  accent: string
-  icon: string | DockIconSpec
-  menu: string[]
-  dockable: boolean
-}
-
-type GenieState = {
-  mode: 'opening' | 'closing' | 'closing-fade'
-  dockRect?: RectState
-  minimizeOnFinish?: boolean
-  removeOnFinish?: boolean
-}
-
-type FinderTab = {
-  id: string
-  history: FinderRoute[]
-  historyIndex: number
-}
-
-type FinderViewMode = 'icons' | 'list'
-
-type FinderState = {
-  tabs: FinderTab[]
-  activeTabId: string
-  viewMode: FinderViewMode
-}
-
-type BrowserState = {
-  history: string[]
-  historyIndex: number
-  inputValue: string
-  reloadKey: number
-  loading: boolean
-  progress: number
-  title: string
-  lastError: string | null
-}
-
-type CalculatorState = {
-  display: string
-  storedValue: number | null
-  operator: '/' | '×' | '-' | '+' | null
-  waitingForOperand: boolean
-}
-
-type TerminalEntry = {
-  id: string
-  command: string
-  output: string
-  error: string
-  exitCode: number
-}
-
-type TerminalState = {
-  cwd: string
-  input: string
-  busy: boolean
-  history: TerminalEntry[]
-}
-
-type WindowState = {
-  id: string
-  appId: AppId
-  title: string
-  x: number
-  y: number
-  width: number
-  height: number
-  zIndex: number
-  minimized: boolean
-  maximized: boolean
-  restoreBounds: RectState | null
-  genie: GenieState | null
-  finderState: FinderState | null
-  browserState: BrowserState | null
-  calculatorState: CalculatorState | null
-  terminalState: TerminalState | null
-  mediaPath: string | null
-  textDocumentId: string | null
-}
-
-type DragState = { id: string; offsetX: number; offsetY: number }
-type ResizeState = { id: string; startX: number; startY: number; startWidth: number; startHeight: number }
-
-type DeviceInfo = {
-  hostname: string
-  osName: string
-  platform: string
-  release: string
-  version: string
-  arch: string
-  cpuModel: string
-  cpuCount: number
-  totalMemoryGb: string
-  freeMemoryGb: string
-  uptimeHours: string
-  homeDir: string
-  userName: string
-  userAvatar: string | null
-  systemWallpapers: Array<{ id: string; name: string; path: string }>
-  volumes: Array<{ name: string; mount: string; totalGb: string; freeGb: string; kind: 'internal' | 'external' }>
-}
-
-type VolumeInfo = DeviceInfo['volumes'][number]
-
-type VolumeEntry = {
-  name: string
-  path: string
-  kind: 'directory' | 'file'
-  extension: string
-  sizeBytes: number | null
-  icon?: string | null
-}
-
-type InstalledApp = {
-  id: string
-  name: string
-  target: string
-  launchTarget?: string
-  source: string
-  icon?: string | null
-}
-
-type DockIconSpec = {
-  kind: 'glyph' | 'image'
-  value: string
-}
-
-type CustomDockItem = {
-  id: string
-  name: string
-  icon: DockIconSpec
-  accent: string
-  kind: 'url' | 'app' | 'finder-route'
-  target: string
-}
-
-type AppVisualOverrides = Partial<
-  Record<
-    AppId,
-    {
-      icon?: DockIconSpec
-      accent?: string
-    }
-  >
->
-
-type ContextMenuState =
-  | {
-      type: 'desktop'
-      x: number
-      y: number
-      desktopX: number
-      desktopY: number
-    }
-  | {
-      type: 'desktop-item'
-      x: number
-      y: number
-      itemId: string
-      label: string
-      kind: DesktopItem['kind']
-    }
-  | {
-      type: 'trash'
-      x: number
-      y: number
-    }
-  | {
-      type: 'finder'
-      x: number
-      y: number
-      windowId: string
-      route: FinderRoute
-      label: string
-    }
-  | {
-      type: 'finder-virtual'
-      x: number
-      y: number
-      windowId: string
-      parentId: string | null
-    }
-  | {
-      type: 'volume-entry'
-      x: number
-      y: number
-      label: string
-      entry: VolumeEntry
-    }
-  | {
-      type: 'dock-app'
-      x: number
-      y: number
-      appId: AppId
-      label: string
-    }
-  | {
-      type: 'dock-custom'
-      x: number
-      y: number
-      itemId: string
-      label: string
-    }
-  | {
-      type: 'dock-volume'
-      x: number
-      y: number
-      mount: string
-      label: string
-    }
-  | null
-
-type AppMenuAction = 'media-open' | 'media-reveal' | 'media-open-system' | 'window-minimize' | 'window-close'
-  | 'media-open-finder'
-  | 'photo-zoom-in'
-  | 'photo-zoom-out'
-  | 'photo-rotate-right'
-  | 'photo-reset-view'
-  | 'video-toggle-play'
-  | 'video-restart'
-  | 'video-toggle-mute'
-  | 'video-speed-normal'
-  | 'video-speed-fast'
-  | 'finder-new-folder'
-  | 'finder-new-text'
-  | 'finder-paste'
-  | 'finder-refresh'
-  | 'finder-go-back'
-  | 'finder-go-forward'
-  | 'finder-go-desktop'
-  | 'finder-go-computer'
-  | 'finder-go-trash'
-  | 'finder-go-device'
-  | 'finder-go-applications'
-  | 'finder-go-dock'
-  | 'finder-go-display'
-  | 'finder-new-window'
-  | 'finder-new-tab'
-  | 'about-open'
-  | 'finder-new-folder'
-  | 'finder-new-text'
-  | 'finder-paste'
-  | 'finder-refresh'
-  | 'finder-go-back'
-  | 'finder-go-forward'
-  | 'finder-go-desktop'
-  | 'finder-go-computer'
-  | 'finder-go-trash'
-  | 'finder-go-device'
-  | 'finder-go-applications'
-  | 'finder-go-dock'
-  | 'finder-go-display'
-  | 'finder-new-window'
-  | 'finder-new-tab'
-  | 'about-open'
-
-type PhotoViewState = {
-  zoom: number
-  rotation: number
-}
-
-type SystemControlsState = {
-  brightness: number
-  volume: number
-  supportsBrightness: boolean
-  supportsVolume: boolean
-}
-
-type SystemControlPatch = Partial<Pick<SystemControlsState, 'brightness' | 'volume'>>
-type DesktopVolumeDragState = { mount: string; offsetX: number; offsetY: number; moved: boolean }
-type AppearanceMode = 'classic' | 'dark'
-type WallpaperPreset = {
-  id: string
-  name: string
-  background: string
-}
-type WallpaperSelection =
-  | { kind: 'preset'; value: string }
-  | { kind: 'upload'; value: string; name: string }
-  | { kind: 'system'; value: string; name: string }
-  | { kind: 'asset'; value: string; name: string }
-type NoteItem = {
-  id: string
-  title: string
-  body: string
-  updatedAt: number
-}
-
-type DesktopItem = {
-  id: string
-  kind: 'folder' | 'text' | 'file'
-  name: string
-  parentId: string | null
-  content: string
-  sourcePath: string | null
-  extension: string
-  iconDataUrl: string | null
-  x: number
-  y: number
-  updatedAt: number
-  trashedAt: number | null
-}
-
-type DesktopItemDragState = {
-  id: string
-  offsetX: number
-  offsetY: number
-  moved: boolean
-}
-
-type DesktopTrashDragState = {
-  offsetX: number
-  offsetY: number
-  moved: boolean
-}
-
-type DesktopClipboardState =
-  | { type: 'desktop-item'; itemId: string }
-  | { type: 'volume-entry'; entry: VolumeEntry }
-  | null
-
-const MENU_BAR_HEIGHT = 30
+const MENU_BAR_HEIGHT = 28
 const DOCK_BOTTOM = 0
 const DOCK_HEIGHT = 82
 const WINDOW_RADIUS = 8
@@ -348,21 +58,15 @@ const DESKTOP_TOP_GAP = 16
 const DESKTOP_BOTTOM_GAP = 18
 const MIN_WINDOW_WIDTH = 320
 const MIN_WINDOW_HEIGHT = 220
-const DOCK_STORAGE_KEY = 'mactorno-dock-items'
-const CUSTOM_DOCK_STORAGE_KEY = 'mactorno-custom-dock-items'
-const APP_VISUAL_STORAGE_KEY = 'mactorno-app-visuals'
 const DESKTOP_VOLUME_POSITIONS_STORAGE_KEY = 'mactorno-desktop-volume-positions'
-const APPEARANCE_MODE_STORAGE_KEY = 'mactorno-appearance-mode'
-const DESKTOP_WALLPAPER_STORAGE_KEY = 'mactorno-desktop-wallpaper'
-const LOGIN_WALLPAPER_STORAGE_KEY = 'mactorno-login-wallpaper'
+const DOCK_PINNED_ORDER_STORAGE_KEY = 'mactorno-dock-pinned-order'
 const NOTES_STORAGE_KEY = 'mactorno-notes'
-const DESKTOP_ITEMS_STORAGE_KEY = 'mactorno-desktop-items'
-const DESKTOP_TRASH_POSITION_STORAGE_KEY = 'mactorno-desktop-trash-position'
+const WINDOW_SESSION_STORAGE_KEY = 'mactorno-window-session'
+const RECENT_ITEMS_STORAGE_KEY = 'mactorno-recent-items'
 const SYSTEM_CONTROLS_DEBOUNCE_MS = 120
 const BROWSER_PROGRESS_SHOW_DELAY_MS = 120
 const BROWSER_PROGRESS_MIN_VISIBLE_MS = 200
 const BROWSER_PROGRESS_HIDE_DELAY_MS = 220
-const DEFAULT_DOCK_ITEMS: AppId[] = ['finder', 'launcher', 'notes', 'safari', 'photos', 'videos', 'calculator', 'docksettings', 'terminal']
 const SAFARI_HOME_URL = 'mactorno://home'
 const DEFAULT_BROWSER_URL = SAFARI_HOME_URL
 const DEFAULT_WEB_FALLBACK_URL = SAFARI_HOME_URL
@@ -380,6 +84,7 @@ const ICON_PRESETS: DockIconSpec[] = [
 const ICON_ASSET_PRESETS: Array<{ label: string; icon: DockIconSpec }> = [
   { label: 'Finder', icon: { kind: 'image', value: '/finder.jpg' } },
   { label: 'Apps', icon: { kind: 'image', value: '/app.png' } },
+  { label: 'Mapas', icon: { kind: 'image', value: '/map.png' } },
   { label: 'Notas', icon: { kind: 'image', value: '/notas.png' } },
   { label: 'Safari', icon: { kind: 'image', value: '/safari.png' } },
   { label: 'Fotos', icon: { kind: 'image', value: '/fotos.png' } },
@@ -388,6 +93,95 @@ const ICON_ASSET_PRESETS: Array<{ label: string; icon: DockIconSpec }> = [
   { label: 'Terminal', icon: { kind: 'image', value: '/Terminalicon2.png' } },
   { label: 'Config', icon: { kind: 'image', value: '/config.png' } },
 ]
+
+type ToastMessage = {
+  id: string
+  title: string
+  detail?: string
+  createdAt: number
+  read: boolean
+}
+
+type RecentItem = {
+  id: string
+  key: string
+  kind: 'app' | 'installed-app' | 'note' | 'document' | 'volume' | 'route' | 'path'
+  title: string
+  subtitle: string
+  createdAt: number
+  appId?: AppId
+  installedAppId?: string
+  noteId?: string
+  itemId?: string
+  route?: FinderRoute
+  mount?: string
+  path?: string
+  icon?: DockIconSpec
+}
+
+type SystemDialogTone = 'default' | 'danger'
+
+type SystemDialogState = {
+  title: string
+  message: string
+  confirmLabel: string
+  cancelLabel?: string
+  tone?: SystemDialogTone
+}
+
+type DockFolderStackEntry = {
+  key: string
+  title: string
+  subtitle: string
+  icon: DockIconSpec
+  action: () => void
+}
+
+type AltTabState = {
+  open: boolean
+  selectedIndex: number
+}
+
+type MissionControlState = {
+  open: boolean
+  selectedIndex: number
+}
+
+type QuickLookTarget = {
+  key: string
+  name: string
+  subtitle: string
+  kind: 'image' | 'video' | 'text' | 'folder' | 'file'
+  path?: string | null
+  extension?: string
+  iconSrc?: string | null
+  textContent?: string
+  location?: string
+}
+
+type WindowSessionEntry = {
+  id: string
+  appId: AppId
+  title: string
+  x: number
+  y: number
+  width: number
+  height: number
+  zIndex: number
+  minimized: boolean
+  maximized: boolean
+  restoreBounds: RectState | null
+  finderState: FinderState | null
+  browserState: BrowserState | null
+  calculatorState: CalculatorState | null
+  terminalState: TerminalState | null
+  mediaPath: string | null
+  textDocumentId: string | null
+}
+
+type StoredRecentItem = Omit<RecentItem, 'icon'> & {
+  icon?: DockIconSpec
+}
 
 const WALLPAPER_PRESETS: WallpaperPreset[] = [
   {
@@ -415,9 +209,6 @@ const WALLPAPER_PRESETS: WallpaperPreset[] = [
       'radial-gradient(circle at 18% 16%, rgba(255, 178, 229, 0.28), transparent 20%), radial-gradient(circle at 84% 22%, rgba(130, 183, 255, 0.24), transparent 24%), linear-gradient(160deg, #120f26 0%, #291b4d 34%, #453380 68%, #0f6a8e 100%)',
   },
 ]
-const DEFAULT_DESKTOP_WALLPAPER: WallpaperSelection = { kind: 'preset', value: WALLPAPER_PRESETS[0].id }
-const DEFAULT_LOGIN_WALLPAPER: WallpaperSelection = { kind: 'asset', value: 'login-default', name: 'Inicio clásico' }
-
 const APPS: DesktopApp[] = [
   { id: 'finder', name: 'Finder', accent: 'linear-gradient(135deg, #7fd1ff 0%, #2f84ff 100%)', icon: 'F', menu: ['Archivo', 'Edicion', 'Ver', 'Ir', 'Ventana', 'Ayuda'], dockable: true },
   { id: 'launcher', name: 'Apps', accent: 'linear-gradient(135deg, #ffd59f 0%, #ff8b4d 100%)', icon: 'A', menu: ['Archivo', 'Ver', 'Ventana', 'Ayuda'], dockable: true },
@@ -439,6 +230,67 @@ function clamp(value: number, min: number, max: number) {
 
 function clampPercent(value: number) {
   return clamp(value, 0, 100)
+}
+
+function getDockPinnedAppKey(appId: AppId) {
+  return `app:${appId}`
+}
+
+function getDockPinnedCustomKey(itemId: string) {
+  return `custom:${itemId}`
+}
+
+function syncDockPinnedOrder(order: string[], dockItems: AppId[], customDockItems: CustomDockItem[]) {
+  const validIds = [
+    ...dockItems.map((item) => getDockPinnedAppKey(item)),
+    ...customDockItems.map((item) => getDockPinnedCustomKey(item.id)),
+  ]
+  const validSet = new Set(validIds)
+  const next = order.filter((item) => validSet.has(item))
+
+  validIds.forEach((item) => {
+    if (!next.includes(item)) {
+      next.push(item)
+    }
+  })
+
+  return next
+}
+
+function loadDockPinnedOrder(dockItems: AppId[], customDockItems: CustomDockItem[]) {
+  const fallback = syncDockPinnedOrder([], dockItems, customDockItems)
+  if (typeof window === 'undefined') {
+    return fallback
+  }
+
+  try {
+    const raw = window.localStorage.getItem(DOCK_PINNED_ORDER_STORAGE_KEY)
+    if (!raw) {
+      return fallback
+    }
+
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? syncDockPinnedOrder(parsed.filter((item): item is string => typeof item === 'string'), dockItems, customDockItems) : fallback
+  } catch {
+    return fallback
+  }
+}
+
+function moveDockPinnedItem(order: string[], draggedId: string, targetId: string) {
+  if (draggedId === targetId) {
+    return order
+  }
+
+  const draggedIndex = order.indexOf(draggedId)
+  const targetIndex = order.indexOf(targetId)
+  if (draggedIndex === -1 || targetIndex === -1) {
+    return order
+  }
+
+  const next = [...order]
+  next.splice(draggedIndex, 1)
+  next.splice(targetIndex, 0, draggedId)
+  return next
 }
 
 function createLampClipPath(anchorX: number, topInset: number, waistInset: number, tipWidth: number, bias = 0) {
@@ -473,65 +325,31 @@ function isVolumeRoute(route: FinderRoute): route is `volume:${string}` {
   return route.startsWith('volume:')
 }
 
-function getVolumeRouteParts(route: FinderRoute) {
-  if (!isVolumeRoute(route)) {
-    return null
-  }
-
-  const raw = route.slice('volume:'.length)
-  const separatorIndex = raw.indexOf('::')
-  if (separatorIndex === -1) {
-    const mount = decodeURIComponent(raw)
-    return { mount, targetPath: mount }
-  }
-
-  const mount = decodeURIComponent(raw.slice(0, separatorIndex))
-  const targetPath = decodeURIComponent(raw.slice(separatorIndex + 2))
-  return { mount, targetPath: targetPath || mount }
-}
-
-function getVolumeMountFromRoute(route: FinderRoute) {
-  return getVolumeRouteParts(route)?.mount ?? null
-}
-
-function getVolumePathFromRoute(route: FinderRoute) {
-  return getVolumeRouteParts(route)?.targetPath ?? null
-}
-
 function createVolumeSubRoute(mount: string, targetPath: string): FinderRoute {
   return `volume:${encodeURIComponent(mount)}::${encodeURIComponent(targetPath)}` as FinderRoute
 }
 
+const DESKTOP_ITEM_DRAG_MIME = 'application/x-mactorno-desktop-item'
+
+function serializeDesktopItemDragPayload(itemId: string) {
+  return JSON.stringify({ itemId })
+}
+
+function parseDesktopItemDragPayload(value: string) {
+  if (!value) {
+    return null
+  }
+
+  try {
+    const parsed = JSON.parse(value) as { itemId?: unknown }
+    return typeof parsed.itemId === 'string' && parsed.itemId ? parsed.itemId : null
+  } catch {
+    return null
+  }
+}
+
 function formatVolumeLabel(mount: string) {
   return mount.replace(/[\\/]+$/, '')
-}
-
-function getPathLeaf(targetPath: string) {
-  const normalized = targetPath.replace(/[\\/]+$/, '')
-  const segments = normalized.split(/[\\/]/).filter(Boolean)
-  return segments[segments.length - 1] ?? normalized
-}
-
-function getDesktopVolumeKind(volume: VolumeInfo) {
-  if (volume.kind === 'external') {
-    return 'sd' as const
-  }
-  if (volume.kind === 'internal') {
-    return 'drive' as const
-  }
-
-  const text = `${volume.name} ${volume.mount}`.toLowerCase()
-  if (text.includes('micro') || text.includes('sd') || text.includes('card')) {
-    return 'sd' as const
-  }
-  if (text.includes('usb') || text.includes('flash') || text.includes('pendrive') || text.includes('remov')) {
-    return 'usb' as const
-  }
-  return 'drive' as const
-}
-
-function getDesktopVolumeIconSrc(volume: VolumeInfo) {
-  return getDesktopVolumeKind(volume) === 'drive' ? '/hd.png' : '/sd.png'
 }
 
 function createVolumeDockItem(volume: VolumeInfo): CustomDockItem {
@@ -545,58 +363,40 @@ function createVolumeDockItem(volume: VolumeInfo): CustomDockItem {
   }
 }
 
-function formatVolumeSize(sizeBytes: number | null) {
-  if (sizeBytes === null || Number.isNaN(sizeBytes)) {
-    return 'Tamano no disponible'
-  }
-
-  if (sizeBytes < 1024) {
-    return `${sizeBytes} B`
-  }
-
-  const units = ['KB', 'MB', 'GB', 'TB']
-  let value = sizeBytes / 1024
-  let unitIndex = 0
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024
-    unitIndex += 1
-  }
-
-  return `${value >= 100 ? Math.round(value) : value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`
+function createDockItemId(prefix: string, value: string) {
+  return `${prefix}-${encodeURIComponent(value)}`
 }
 
-function serializeVolumeEntryPayload(entry: VolumeEntry) {
-  return JSON.stringify(entry)
-}
-
-function parseVolumeEntryPayload(payload: string) {
-  try {
-    const parsed = JSON.parse(payload) as VolumeEntry
-    if (!parsed?.path || !parsed?.name || !parsed?.kind) {
-      return null
-    }
-    return parsed
-  } catch {
-    return null
+function getDockPathEntry(targetPath: string, label?: string, icon?: string | null): VolumeEntry {
+  const name = label || getPathLeaf(targetPath)
+  const extensionMatch = name.match(/\.([^.]+)$/)
+  return {
+    name,
+    path: targetPath,
+    kind: 'file',
+    extension: extensionMatch?.[1] ?? '',
+    sizeBytes: null,
+    icon: icon ?? null,
   }
 }
 
-function isImageEntry(entry: VolumeEntry) {
-  return ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.avif'].includes(entry.extension.toLowerCase())
-}
+function createPathDockItem(targetPath: string, label?: string, icon?: string | null): CustomDockItem {
+  const entry = getDockPathEntry(targetPath, label, icon)
+  const iconSpec =
+    entry.icon
+      ? { kind: 'image' as const, value: entry.icon }
+      : isImageEntry(entry)
+        ? { kind: 'image' as const, value: getMediaSource(targetPath) }
+        : { kind: 'image' as const, value: getDocumentPreviewIcon(entry.name, entry.extension) }
 
-function isVideoEntry(entry: VolumeEntry) {
-  return ['.mp4', '.webm', '.mov', '.mkv', '.avi', '.m4v'].includes(entry.extension.toLowerCase())
-}
-
-function getMediaSource(filePath: string) {
-  if (/^blob:/i.test(filePath)) {
-    return filePath
+  return {
+    id: createDockItemId('path', targetPath),
+    name: entry.name,
+    target: targetPath,
+    kind: 'path',
+    icon: iconSpec,
+    accent: 'transparent',
   }
-
-  return window.electronDesktop
-    ? `mactorno-media://${encodeURIComponent(filePath)}`
-    : `/api/media-file?path=${encodeURIComponent(filePath)}`
 }
 
 function getWallpaperPreviewSource(selection: WallpaperSelection) {
@@ -619,10 +419,6 @@ function getWallpaperBackground(selection: WallpaperSelection) {
   return preview.type === 'gradient'
     ? preview.value
     : `url("${preview.value}") center center / cover no-repeat`
-}
-
-function isWallpaperSelectionActive(current: WallpaperSelection, candidate: WallpaperSelection) {
-  return current.kind === candidate.kind && current.value === candidate.value
 }
 
 const MENU_TIME_FORMATTER = new Intl.DateTimeFormat('es-CL', {
@@ -655,42 +451,6 @@ function formatLoginTime(date: Date) {
   return LOGIN_TIME_FORMATTER.format(date)
 }
 
-function getApp(appId: AppId) {
-  const app = APPS.find((item) => item.id === appId)
-  if (!app) {
-    throw new Error(`App desconocida: ${appId}`)
-  }
-  return app
-}
-
-function getFinderLabel(route: FinderRoute) {
-  if (isVolumeRoute(route)) {
-    const parts = getVolumeRouteParts(route)
-    if (!parts) {
-      return route
-    }
-
-    return parts.targetPath === parts.mount ? formatVolumeLabel(parts.mount) : getPathLeaf(parts.targetPath)
-  }
-
-  switch (route) {
-    case 'computer':
-      return 'Equipo'
-    case 'desktop':
-      return 'Escritorio'
-    case 'trash':
-      return 'Papelera'
-    case 'device':
-      return 'Informacion del dispositivo'
-    case 'applications':
-      return 'Aplicaciones'
-    case 'dock':
-      return 'Dock'
-    case 'display':
-      return 'Pantalla'
-  }
-}
-
 function getFinderRouteIcon(route: FinderRoute) {
   if (isVolumeRoute(route)) {
     return '◫'
@@ -714,85 +474,6 @@ function getFinderRouteIcon(route: FinderRoute) {
   }
 }
 
-function loadDesktopItems() {
-  if (typeof window === 'undefined') {
-    return [] as DesktopItem[]
-  }
-
-  try {
-    const raw = window.localStorage.getItem(DESKTOP_ITEMS_STORAGE_KEY)
-    const parsed = raw ? JSON.parse(raw) as DesktopItem[] : []
-    return Array.isArray(parsed)
-      ? parsed.map((item) => ({
-          ...item,
-          sourcePath: typeof item.sourcePath === 'string' ? item.sourcePath : null,
-          extension: typeof item.extension === 'string' ? item.extension : '',
-          iconDataUrl: typeof item.iconDataUrl === 'string' ? item.iconDataUrl : null,
-          trashedAt: typeof item.trashedAt === 'number' ? item.trashedAt : null,
-        }))
-      : []
-  } catch {
-    return []
-  }
-}
-
-function loadDesktopTrashPosition() {
-  if (typeof window === 'undefined') {
-    return null as { x: number; y: number } | null
-  }
-
-  try {
-    const raw = window.localStorage.getItem(DESKTOP_TRASH_POSITION_STORAGE_KEY)
-    return raw ? JSON.parse(raw) as { x: number; y: number } : null
-  } catch {
-    return null
-  }
-}
-
-function loadAppearanceMode() {
-  if (typeof window === 'undefined') {
-    return 'classic' as AppearanceMode
-  }
-
-  const raw = window.localStorage.getItem(APPEARANCE_MODE_STORAGE_KEY)
-  return raw === 'dark' ? 'dark' : 'classic'
-}
-
-function isValidWallpaperSelection(value: unknown): value is WallpaperSelection {
-  if (!value || typeof value !== 'object' || !('kind' in value) || !('value' in value)) {
-    return false
-  }
-
-  const selection = value as WallpaperSelection
-  if (selection.kind === 'preset') {
-    return WALLPAPER_PRESETS.some((preset) => preset.id === selection.value)
-  }
-
-  if (selection.kind === 'asset') {
-    return selection.value === DEFAULT_LOGIN_WALLPAPER.value
-  }
-
-  return typeof selection.value === 'string' && selection.value.length > 0
-}
-
-function loadWallpaperSelection(storageKey: string, fallback: WallpaperSelection) {
-  if (typeof window === 'undefined') {
-    return fallback
-  }
-
-  try {
-    const raw = window.localStorage.getItem(storageKey)
-    if (!raw) {
-      return fallback
-    }
-
-    const parsed = JSON.parse(raw)
-    return isValidWallpaperSelection(parsed) ? parsed : fallback
-  } catch {
-    return fallback
-  }
-}
-
 function loadNotes() {
   if (typeof window === 'undefined') {
     return [] as NoteItem[]
@@ -811,6 +492,42 @@ function loadNotes() {
       ] as NoteItem[]
     }
     const parsed = JSON.parse(raw) as NoteItem[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function loadWindowSession() {
+  if (typeof window === 'undefined') {
+    return [] as WindowSessionEntry[]
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WINDOW_SESSION_STORAGE_KEY)
+    if (!raw) {
+      return []
+    }
+
+    const parsed = JSON.parse(raw) as WindowSessionEntry[]
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
+function loadRecentItems() {
+  if (typeof window === 'undefined') {
+    return [] as RecentItem[]
+  }
+
+  try {
+    const raw = window.localStorage.getItem(RECENT_ITEMS_STORAGE_KEY)
+    if (!raw) {
+      return []
+    }
+
+    const parsed = JSON.parse(raw) as StoredRecentItem[]
     return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
@@ -854,7 +571,7 @@ function createTerminalState(cwd: string): TerminalState {
 
 function createFinderState(route: FinderRoute): FinderState {
   const tab = createFinderTab(route, 1)
-  return { tabs: [tab], activeTabId: tab.id, viewMode: 'icons' }
+  return { tabs: [tab], activeTabId: tab.id, viewMode: 'icons', sortMode: 'name' }
 }
 
 function normalizeBrowserUrl(value: string) {
@@ -880,7 +597,8 @@ function normalizeBrowserUrl(value: string) {
 
 function createBrowserState(initialUrl = DEFAULT_BROWSER_URL): BrowserState {
   const normalized = normalizeBrowserUrl(initialUrl)
-  return {
+  const initialTab: BrowserTab = {
+    id: `browser-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     history: [normalized],
     historyIndex: 0,
     inputValue: normalized,
@@ -890,6 +608,18 @@ function createBrowserState(initialUrl = DEFAULT_BROWSER_URL): BrowserState {
     title: '',
     lastError: null,
   }
+  return {
+    tabs: [initialTab],
+    activeTabId: initialTab.id,
+    history: initialTab.history,
+    historyIndex: initialTab.historyIndex,
+    inputValue: initialTab.inputValue,
+    reloadKey: initialTab.reloadKey,
+    loading: initialTab.loading,
+    progress: initialTab.progress,
+    title: initialTab.title,
+    lastError: initialTab.lastError,
+  }
 }
 
 function getInitialBrowserUrl(isElectronDesktop: boolean) {
@@ -898,6 +628,30 @@ function getInitialBrowserUrl(isElectronDesktop: boolean) {
 
 function isSafariHomeUrl(url: string) {
   return url === SAFARI_HOME_URL
+}
+
+function getActiveBrowserTab(browserState: BrowserState) {
+  return browserState.tabs.find((tab) => tab.id === browserState.activeTabId) ?? browserState.tabs[0]
+}
+
+function syncBrowserState(browserState: BrowserState): BrowserState {
+  const activeTab = getActiveBrowserTab(browserState)
+  if (!activeTab) {
+    return createBrowserState()
+  }
+
+  return {
+    ...browserState,
+    activeTabId: activeTab.id,
+    history: activeTab.history,
+    historyIndex: activeTab.historyIndex,
+    inputValue: activeTab.inputValue,
+    reloadKey: activeTab.reloadKey,
+    loading: activeTab.loading,
+    progress: activeTab.progress,
+    title: activeTab.title,
+    lastError: activeTab.lastError,
+  }
 }
 
 function isBlockedEmbeddedPage(lastError: string | null) {
@@ -916,390 +670,56 @@ function getActiveFinderRoute(finderState: FinderState | null) {
   return tab ? tab.history[tab.historyIndex] : ('computer' as FinderRoute)
 }
 
-function loadDockItems() {
-  if (typeof window === 'undefined') {
-    return DEFAULT_DOCK_ITEMS
-  }
-
-  try {
-    const raw = window.localStorage.getItem(DOCK_STORAGE_KEY)
-    if (!raw) {
-      return DEFAULT_DOCK_ITEMS
-    }
-    const parsed = JSON.parse(raw) as AppId[]
-    const valid = parsed.filter((item) => APPS.some((app) => app.id === item && app.dockable))
-    if (valid.length === 0) {
-      return DEFAULT_DOCK_ITEMS
-    }
-
-    const next: AppId[] = [...valid]
-
-    if (!next.includes('photos')) {
-      const safariIndex = next.indexOf('safari')
-      if (safariIndex >= 0) {
-        next.splice(safariIndex + 1, 0, 'photos')
-      } else {
-        next.push('photos')
-      }
-    }
-
-    if (!next.includes('videos')) {
-      const photosIndex = next.indexOf('photos')
-      if (photosIndex >= 0) {
-        next.splice(photosIndex + 1, 0, 'videos')
-      } else {
-        next.push('videos')
-      }
-    }
-
-    if (!next.includes('calculator')) {
-      const terminalIndex = next.indexOf('terminal')
-      if (terminalIndex >= 0) {
-        next.splice(terminalIndex, 0, 'calculator')
-      } else {
-        next.push('calculator')
-      }
-    }
-
-    if (!next.includes('docksettings')) {
-      const terminalIndex = next.indexOf('terminal')
-      if (terminalIndex >= 0) {
-        next.splice(terminalIndex, 0, 'docksettings')
-      } else {
-        next.push('docksettings')
-      }
-    }
-
-    return next
-  } catch {
-    return DEFAULT_DOCK_ITEMS
-  }
-}
-
-function loadCustomDockItems() {
-  if (typeof window === 'undefined') {
-    return [] as CustomDockItem[]
-  }
-
-  try {
-    const raw = window.localStorage.getItem(CUSTOM_DOCK_STORAGE_KEY)
-    if (!raw) {
-      return []
-    }
-    const parsed = JSON.parse(raw) as Array<CustomDockItem & { icon: DockIconSpec | string }>
-    return parsed.map((item) => ({
-      ...item,
-      icon: normalizeIconSpec(item.icon),
-    }))
-  } catch {
-    return []
-  }
-}
-
-function normalizeIconSpec(value: DockIconSpec | string | null | undefined): DockIconSpec {
-  if (typeof value === 'string') {
-    return { kind: 'glyph', value: value || '?' }
-  }
-
-  if (value && (value.kind === 'glyph' || value.kind === 'image') && typeof value.value === 'string') {
-    return { kind: value.kind, value: value.value || '?' }
-  }
-
-  return { kind: 'glyph', value: '?' }
-}
-
-function loadAppVisualOverrides() {
-  if (typeof window === 'undefined') {
-    return {} as AppVisualOverrides
-  }
-
-  try {
-    const raw = window.localStorage.getItem(APP_VISUAL_STORAGE_KEY)
-    if (!raw) {
-      return {}
-    }
-    const parsed = JSON.parse(raw) as Record<string, { icon?: DockIconSpec | string; accent?: string }>
-    return Object.fromEntries(
-      Object.entries(parsed).map(([key, value]) => [
-        key,
-        {
-          icon: value.icon ? normalizeIconSpec(value.icon) : undefined,
-          accent: value.accent,
-        },
-      ]),
-    ) as AppVisualOverrides
-  } catch {
-    return {}
-  }
-}
-
-function renderDockIconContent(icon: DockIconSpec) {
-  if (icon.kind === 'image') {
-    return <img className="dock-icon-image" src={icon.value} alt="" draggable={false} />
-  }
-  return <span className="dock-icon-glyph">{icon.value}</span>
-}
-
-function getAppLauncherIcon(app: InstalledApp) {
-  if (app.icon) {
-    return <img className="launchpad-app-icon-image" src={app.icon} alt="" draggable={false} />
-  }
-
-  const name = app.name
-  const normalized = name.toLowerCase()
-  if (normalized.includes('chrome') || normalized.includes('edge') || normalized.includes('firefox') || normalized.includes('browser')) {
-    return '🌐'
-  }
-  if (normalized.includes('terminal') || normalized.includes('powershell') || normalized.includes('cmd')) {
-    return '⌘'
-  }
-  if (normalized.includes('code') || normalized.includes('studio')) {
-    return '💠'
-  }
-  if (normalized.includes('note') || normalized.includes('nota')) {
-    return '📝'
-  }
-  if (normalized.includes('music') || normalized.includes('spotify')) {
-    return '🎵'
-  }
-  if (normalized.includes('steam') || normalized.includes('game')) {
-    return '🎮'
-  }
-  if (normalized.includes('photo') || normalized.includes('camera')) {
-    return '📷'
-  }
-  return (name.trim()[0] || 'A').toUpperCase()
-}
-
-function renderInstalledAppIcon(app: InstalledApp, className = 'app-row-icon') {
-  return <span className={className}>{getAppLauncherIcon(app)}</span>
-}
 
 function clampControlValue(value: number) {
   return Math.max(0, Math.min(100, Math.round(value)))
 }
 
-const DockIconButton = memo(function DockIconButton({
-  name,
-  accent,
-  icon,
-  isOpen,
-  mouseX,
-  centerX,
-  onActivate,
-  registerRef,
-  id,
-  draggable = false,
-  onDragStart,
-  onDragEnd,
-  onContextMenu,
-}: {
-  id: string
-  name: string
-  accent: string
-  icon: DockIconSpec
-  isOpen: boolean
-  mouseX: MotionValue<number>
-  centerX: number
-  onActivate: () => void
-  registerRef: (id: string, node: HTMLButtonElement | null) => void
-  draggable?: boolean
-  onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
-  onDragEnd?: (event: React.DragEvent<HTMLButtonElement>) => void
-  onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void
-}) {
-  const [hovered, setHovered] = useState(false)
-
-  const distance = useTransform(mouseX, (value) => value - centerX)
-
-  const itemWidth = useSpring(useTransform(distance, [-180, 0, 180], [50, 82, 50]), {
-    mass: 0.12,
-    stiffness: 180,
-    damping: 14,
-  })
-  const iconScale = useSpring(useTransform(distance, [-180, 0, 180], [1, 80 / 48, 1]), {
-    mass: 0.12,
-    stiffness: 180,
-    damping: 14,
-  })
-  const iconLift = useSpring(useTransform(distance, [-180, 0, 180], [0, -18, 0]), {
-    mass: 0.12,
-    stiffness: 180,
-    damping: 14,
-  })
-  const tooltipLift = useTransform(iconLift, (value) => value - 8)
-
-  return (
-    <motion.button
-      ref={(node) => {
-        registerRef(id, node)
-      }}
-      type="button"
-      className="dock-item"
-      style={{ width: itemWidth, minWidth: itemWidth }}
-      aria-label={`Abrir ${name}`}
-      draggable={draggable}
-      onClick={onActivate}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onDragStartCapture={onDragStart}
-      onDragEndCapture={onDragEnd}
-      onContextMenu={onContextMenu}
-    >
-      <AnimatePresence>
-        {hovered ? (
-          <motion.span
-            className="dock-label visible"
-            style={{ y: tooltipLift }}
-            initial={{ opacity: 0, y: 8, x: '-50%' }}
-            animate={{ opacity: 1, y: 0, x: '-50%' }}
-            exit={{ opacity: 0, y: 4, x: '-50%' }}
-          >
-            {name}
-          </motion.span>
-        ) : null}
-      </AnimatePresence>
-      <motion.span
-        className="dock-icon"
-        style={{ background: accent, scale: iconScale, y: iconLift }}
-      >
-        {renderDockIconContent(icon)}
-      </motion.span>
-      <motion.span
-        className={`dock-indicator${isOpen ? ' visible' : ''}`}
-        style={{ y: useTransform(iconLift, (value) => value * 0.35) }}
-      />
-    </motion.button>
-  )
-})
-
-function VideoPlayer({
-  src,
-  videoRef,
-  onPlaybackStateChange,
-}: {
-  src: string
-  videoRef?: (node: HTMLVideoElement | null) => void
-  onPlaybackStateChange?: () => void
-}) {
-  const stageRef = useRef<HTMLDivElement | null>(null)
-  const [aspectRatio, setAspectRatio] = useState(16 / 10)
-  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 })
-
-  useEffect(() => {
-    const stage = stageRef.current
-    if (!stage) {
-      return
-    }
-
-    const updateSize = () => {
-      const width = stage.clientWidth
-      const height = stage.clientHeight
-      if (!width || !height) {
-        return
-      }
-
-      const containerRatio = width / height
-      if (containerRatio > aspectRatio) {
-        const nextHeight = height
-        const nextWidth = Math.round(nextHeight * aspectRatio)
-        setFrameSize({ width: nextWidth, height: nextHeight })
-        return
-      }
-
-      const nextWidth = width
-      const nextHeight = Math.round(nextWidth / aspectRatio)
-      setFrameSize({ width: nextWidth, height: nextHeight })
-    }
-
-    updateSize()
-    const observer = new ResizeObserver(updateSize)
-    observer.observe(stage)
-    return () => observer.disconnect()
-  }, [aspectRatio, src])
-
-  return (
-    <div ref={stageRef} className="media-stage media-video-stage">
-      <div className="media-video-frame" style={{ width: frameSize.width, height: frameSize.height }}>
-        <video
-          className="media-video"
-          src={src}
-          controls
-          preload="auto"
-          ref={videoRef}
-          onPlay={onPlaybackStateChange}
-          onPause={onPlaybackStateChange}
-          onVolumeChange={onPlaybackStateChange}
-          onRateChange={onPlaybackStateChange}
-          onLoadedMetadata={async (event) => {
-            const video = event.currentTarget
-            if (video.videoWidth && video.videoHeight) {
-              setAspectRatio(video.videoWidth / video.videoHeight)
-            }
-            onPlaybackStateChange?.()
-          }}
-        />
-      </div>
-    </div>
-  )
+function normalizeSearchText(value: string) {
+  return value
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
 }
 
-function PhotoViewer({ src, alt, zoom = 1, rotation = 0 }: { src: string; alt: string; zoom?: number; rotation?: number }) {
-  const stageRef = useRef<HTMLDivElement | null>(null)
-  const [aspectRatio, setAspectRatio] = useState(4 / 3)
-  const [frameSize, setFrameSize] = useState({ width: 0, height: 0 })
+function getSearchScore(query: string, ...sources: Array<string | null | undefined>) {
+  const normalizedQuery = normalizeSearchText(query)
+  if (!normalizedQuery) {
+    return 0
+  }
 
-  useEffect(() => {
-    const stage = stageRef.current
-    if (!stage) {
-      return
+  let bestScore = -1
+  for (const source of sources) {
+    const normalizedSource = normalizeSearchText(source ?? '')
+    if (!normalizedSource) {
+      continue
     }
 
-    const updateSize = () => {
-      const width = stage.clientWidth
-      const height = stage.clientHeight
-      if (!width || !height) {
-        return
-      }
-
-      const containerRatio = width / height
-      if (containerRatio > aspectRatio) {
-        const nextHeight = height
-        const nextWidth = Math.round(nextHeight * aspectRatio)
-        setFrameSize({ width: nextWidth, height: nextHeight })
-        return
-      }
-
-      const nextWidth = width
-      const nextHeight = Math.round(nextWidth / aspectRatio)
-      setFrameSize({ width: nextWidth, height: nextHeight })
+    if (normalizedSource === normalizedQuery) {
+      bestScore = Math.max(bestScore, 120)
+      continue
     }
 
-    updateSize()
-    const observer = new ResizeObserver(updateSize)
-    observer.observe(stage)
-    return () => observer.disconnect()
-  }, [aspectRatio, src])
+    if (normalizedSource.startsWith(normalizedQuery)) {
+      bestScore = Math.max(bestScore, 90)
+      continue
+    }
 
-  return (
-    <div ref={stageRef} className="media-stage media-photo-stage">
-      <div className="media-photo-frame" style={{ width: frameSize.width, height: frameSize.height }}>
-        <img
-          className="media-image"
-          src={src}
-          alt={alt}
-          draggable={false}
-          style={{ transform: `scale(${zoom}) rotate(${rotation}deg)` }}
-          onLoad={(event) => {
-            const image = event.currentTarget
-            if (image.naturalWidth && image.naturalHeight) {
-              setAspectRatio(image.naturalWidth / image.naturalHeight)
-            }
-          }}
-        />
-      </div>
-    </div>
-  )
+    const wordMatch = normalizedSource
+      .split(/\s+/)
+      .some((part) => part.startsWith(normalizedQuery))
+    if (wordMatch) {
+      bestScore = Math.max(bestScore, 72)
+      continue
+    }
+
+    if (normalizedSource.includes(normalizedQuery)) {
+      bestScore = Math.max(bestScore, 56)
+    }
+  }
+
+  return bestScore
 }
 
 function App() {
@@ -1316,41 +736,28 @@ function App() {
   const [windows, setWindows] = useState<WindowState[]>([])
   const [drag, setDrag] = useState<DragState | null>(null)
   const [resize, setResize] = useState<ResizeState | null>(null)
-  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null)
-  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([])
-  const [volumeEntriesByMount, setVolumeEntriesByMount] = useState<Record<string, VolumeEntry[]>>({})
-  const [loadingVolumeMounts, setLoadingVolumeMounts] = useState<Record<string, boolean>>({})
-  const [loadingSystem, setLoadingSystem] = useState(false)
-  const [systemError, setSystemError] = useState<string | null>(null)
   const [controlCenterOpen, setControlCenterOpen] = useState(false)
-  const [systemControls, setSystemControls] = useState<SystemControlsState>({
-    brightness: 70,
-    volume: 50,
-    supportsBrightness: false,
-    supportsVolume: false,
-  })
   const [contextMenu, setContextMenu] = useState<ContextMenuState>(null)
-  const [dockItems, setDockItems] = useState<AppId[]>(() => loadDockItems())
-  const [customDockItems, setCustomDockItems] = useState<CustomDockItem[]>(() => loadCustomDockItems())
-  const [appVisualOverrides, setAppVisualOverrides] = useState<AppVisualOverrides>(() => loadAppVisualOverrides())
+  const [dockFolderStackItemId, setDockFolderStackItemId] = useState<string | null>(null)
   const [desktopVolumePositions, setDesktopVolumePositions] = useState<Record<string, { x: number; y: number }>>(() => loadDesktopVolumePositions())
-  const [appearanceMode, setAppearanceMode] = useState<AppearanceMode>(() => loadAppearanceMode())
-  const [desktopWallpaper, setDesktopWallpaper] = useState<WallpaperSelection>(() =>
-    loadWallpaperSelection(DESKTOP_WALLPAPER_STORAGE_KEY, DEFAULT_DESKTOP_WALLPAPER),
-  )
-  const [loginWallpaper, setLoginWallpaper] = useState<WallpaperSelection>(() =>
-    loadWallpaperSelection(LOGIN_WALLPAPER_STORAGE_KEY, DEFAULT_LOGIN_WALLPAPER),
-  )
   const [notes, setNotes] = useState<NoteItem[]>(() => loadNotes())
-  const [desktopItems, setDesktopItems] = useState<DesktopItem[]>(() => loadDesktopItems())
-  const [desktopTrashPosition, setDesktopTrashPosition] = useState<{ x: number; y: number } | null>(() => loadDesktopTrashPosition())
-  const [desktopClipboard, setDesktopClipboard] = useState<DesktopClipboardState>(null)
-  const [editingDesktopItemId, setEditingDesktopItemId] = useState<string | null>(null)
-  const [editingDesktopItemName, setEditingDesktopItemName] = useState('')
+  const [toasts, setToasts] = useState<ToastMessage[]>([])
+  const [notificationHistory, setNotificationHistory] = useState<ToastMessage[]>([])
+  const [recentItems, setRecentItems] = useState<RecentItem[]>(() => loadRecentItems())
+  const [systemDialog, setSystemDialog] = useState<SystemDialogState | null>(null)
+  const [altTabState, setAltTabState] = useState<AltTabState>({ open: false, selectedIndex: 0 })
+  const [missionControlState, setMissionControlState] = useState<MissionControlState>({ open: false, selectedIndex: 0 })
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null)
   const [launcherOpen, setLauncherOpen] = useState(false)
   const [launcherSearch, setLauncherSearch] = useState('')
   const [launcherPage, setLauncherPage] = useState(0)
+  const [spotlightOpen, setSpotlightOpen] = useState(false)
+  const [spotlightQuery, setSpotlightQuery] = useState('')
+  const [spotlightSelectionIndex, setSpotlightSelectionIndex] = useState(0)
+  const [quickLookCandidate, setQuickLookCandidate] = useState<QuickLookTarget | null>(null)
+  const [quickLookTarget, setQuickLookTarget] = useState<QuickLookTarget | null>(null)
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(false)
+  const [windowMorphIds, setWindowMorphIds] = useState<string[]>([])
   const [newDockName, setNewDockName] = useState('')
   const [newDockIconKind, setNewDockIconKind] = useState<DockIconSpec['kind']>('glyph')
   const [newDockIconValue, setNewDockIconValue] = useState('📁')
@@ -1371,12 +778,17 @@ function App() {
   const windowFrameRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const browserHostRefs = useRef<Record<string, HTMLDivElement | null>>({})
   const dockRef = useRef<HTMLDivElement | null>(null)
+  const dockFolderStackRef = useRef<HTMLDivElement | null>(null)
   const menuBarRef = useRef<HTMLDivElement | null>(null)
   const launcherPanelRef = useRef<HTMLDivElement | null>(null)
+  const spotlightPanelRef = useRef<HTMLDivElement | null>(null)
+  const spotlightInputRef = useRef<HTMLInputElement | null>(null)
   const controlCenterRef = useRef<HTMLDivElement | null>(null)
   const powerMenuRef = useRef<HTMLDivElement | null>(null)
+  const statusMenusRef = useRef<HTMLDivElement | null>(null)
   const runningGenies = useRef(new Set<string>())
   const dragPreviewRef = useRef<{ id: string; x: number; y: number } | null>(null)
+  const dockDragItemIdRef = useRef<string | null>(null)
   const resizePreviewRef = useRef<{ id: string; width: number; height: number } | null>(null)
   const desktopVolumeDragRef = useRef<DesktopVolumeDragState | null>(null)
   const skipDesktopVolumeClickRef = useRef<string | null>(null)
@@ -1389,68 +801,117 @@ function App() {
   const pendingDockMouseX = useRef<number | null>(null)
   const dockMouseFrameRef = useRef<number | null>(null)
   const windowsRef = useRef<WindowState[]>(windows)
-  const volumeEntriesByMountRef = useRef(volumeEntriesByMount)
-  const loadingVolumeMountsRef = useRef(loadingVolumeMounts)
   const browserSyncFrameRef = useRef<number | null>(null)
   const scheduleBrowserHostSyncRef = useRef<(() => void) | null>(null)
   const lastBrowserSyncSignatureRef = useRef('')
   const browserProgressResetTimersRef = useRef<Record<string, number>>({})
   const browserProgressShowTimersRef = useRef<Record<string, number>>({})
   const browserProgressVisibleSinceRef = useRef<Record<string, number>>({})
+  const windowMorphTimersRef = useRef<Record<string, number>>({})
   const moveDesktopItemToFolderRef = useRef<(itemId: string, folderId: string) => void>(() => {})
   const moveDesktopItemToTrashRef = useRef<(itemId: string) => void>(() => {})
   const completeBrowserProgressRef = useRef<(windowId: string, hasError?: boolean) => void>(() => {})
   const activeSafariWindowIdRef = useRef<string | null>(null)
+  const toastTimersRef = useRef<Record<string, number>>({})
+  const dialogConfirmActionRef = useRef<(() => void) | null>(null)
+  const sessionHydratedRef = useRef(false)
   const [dockCenters, setDockCenters] = useState<Record<string, number>>({})
   const [openAppMenu, setOpenAppMenu] = useState<string | null>(null)
   const [powerMenuOpen, setPowerMenuOpen] = useState(false)
+  const [statusMenuOpen, setStatusMenuOpen] = useState<'wifi' | 'bluetooth' | null>(null)
+  const [networkOnline, setNetworkOnline] = useState<boolean>(() => (typeof navigator === 'undefined' ? true : navigator.onLine))
   const [photoViewStates, setPhotoViewStates] = useState<Record<string, PhotoViewState>>({})
   const [videoPlaybackState, setVideoPlaybackState] = useState<Record<string, { playing: boolean; muted: boolean; rate: number }>>({})
+  const {
+    desktopClipboard,
+    desktopItems,
+    desktopTrashPosition,
+    editingDesktopItemId,
+    editingDesktopItemName,
+    hasApplicationsFinderOpen,
+    progressiveEntryPaths,
+    rootDesktopItems,
+    setDesktopClipboard,
+    setDesktopItems,
+    setDesktopTrashPosition,
+    setEditingDesktopItemId,
+    setEditingDesktopItemName,
+    trashItems,
+  } = useFinder({ windows })
+  const {
+    appearanceMode,
+    desktopWallpaper,
+    deviceInfo,
+    initialLowEndDevice,
+    installedApps,
+    loadingSystem,
+    loadingVolumeMounts,
+    loadVolumeEntriesPage,
+    loginWallpaper,
+    performanceMode,
+    resolvedPerformanceProfile,
+    setAppearanceMode,
+    setDesktopWallpaper,
+    setLoginWallpaper,
+    setLoadingVolumeMounts,
+    setPerformanceMode,
+    setSystemControls,
+    setSystemError,
+    setVisibleEntryCountsByPath,
+    setVisibleInstalledAppsCount,
+    setVolumeEntriesByMount,
+    systemControls,
+    systemError,
+    visibleEntryCountsByPath,
+    visibleInstalledAppsCount,
+    volumeEntriesByMount,
+    volumeEntryMetaByPath,
+  } = useSystemData({
+    hasApplicationsFinderOpen,
+    launcherOpen,
+    loggedIn,
+    prefersReducedMotion,
+    progressiveEntryPaths,
+  })
+  const {
+    customDockItems,
+    dockHoverAnimationEnabled,
+    dockItems,
+    openAppIds,
+    resolvedApps,
+    setAppVisualOverrides,
+    setCustomDockItems,
+    setDockHoverAnimationEnabled,
+    setDockItems,
+    visibleDockAppIds,
+    visibleVolumeDockItems,
+  } = useDock({ windows, deviceInfo })
+  const [dockPinnedOrder, setDockPinnedOrder] = useState<string[]>(() => loadDockPinnedOrder(dockItems, customDockItems))
+  const [runtimeDockItems, setRuntimeDockItems] = useState<CustomDockItem[]>([])
+  const notificationUnreadCount = useMemo(
+    () => notificationHistory.filter((item) => !item.read).length,
+    [notificationHistory],
+  )
+  const connectionInfo = typeof navigator !== 'undefined' && 'connection' in navigator
+    ? (navigator as Navigator & { connection?: { effectiveType?: string; downlink?: number; saveData?: boolean } }).connection
+    : undefined
+  const wifiStatusSummary = networkOnline
+    ? connectionInfo?.effectiveType
+      ? `${String(connectionInfo.effectiveType).toUpperCase()}${connectionInfo.downlink ? ` · ${connectionInfo.downlink.toFixed(1)} Mb/s` : ''}`
+      : 'Conectado'
+    : 'Sin conexion'
+  const bluetoothSupported = typeof navigator !== 'undefined' && 'bluetooth' in navigator
+  const bluetoothStatusSummary = bluetoothSupported ? 'Disponible en este equipo' : 'No detectado'
   const desktopWallpaperBackground = getWallpaperBackground(desktopWallpaper)
   const loginWallpaperBackground = getWallpaperBackground(loginWallpaper)
+  const maximizeAnimationDurationMs =
+    resolvedPerformanceProfile === 'high' ? 320 : resolvedPerformanceProfile === 'balanced' ? 240 : 0
   const activeNote = notes.find((note) => note.id === selectedNoteId) ?? notes[0] ?? null
-  const rootDesktopItems = useMemo(
-    () => desktopItems.filter((item) => item.parentId === null && item.trashedAt === null),
-    [desktopItems],
-  )
-  const trashItems = useMemo(() => {
-    const trashed = desktopItems.filter((item) => item.trashedAt !== null)
-    const trashedIds = new Set(trashed.map((item) => item.id))
-    return trashed.filter((item) => !item.parentId || !trashedIds.has(item.parentId))
-  }, [desktopItems])
   const videoElementRefs = useRef<Record<string, HTMLVideoElement | null>>({})
   const visibleWindowCount = useMemo(
     () => windows.filter((item) => !item.minimized && !item.genie?.removeOnFinish).length,
     [windows],
   )
-  const openAppIds = useMemo(() => new Set(windows.map((item) => item.appId)), [windows])
-  const visibleDockAppIds = useMemo(() => {
-    const runningDockableApps = windows
-      .map((item) => item.appId)
-      .filter((appId, index, current) =>
-        current.indexOf(appId) === index && getApp(appId).dockable && !dockItems.includes(appId),
-      )
-
-    return [...dockItems, ...runningDockableApps]
-  }, [dockItems, windows])
-  const visibleVolumeDockItems = useMemo(() => {
-    const pinnedTargets = new Set(
-      customDockItems
-        .filter((item) => item.kind === 'finder-route')
-        .map((item) => item.target),
-    )
-
-    const openMounts = windows
-      .filter((item) => item.appId === 'finder' && item.finderState && !item.genie?.removeOnFinish)
-      .map((item) => getVolumeMountFromRoute(getActiveFinderRoute(item.finderState)))
-      .filter((mount): mount is string => !!mount)
-
-    return [...new Set(openMounts)]
-      .map((mount) => deviceInfo?.volumes.find((volume) => volume.mount === mount))
-      .filter((volume): volume is VolumeInfo => !!volume)
-      .filter((volume) => !pinnedTargets.has(createVolumeRoute(volume.mount)))
-      .map((volume) => createVolumeDockItem(volume))
-  }, [customDockItems, deviceInfo?.volumes, windows])
   const activeWindow = useMemo(
     () =>
       [...windows]
@@ -1465,22 +926,497 @@ function App() {
         .sort((left, right) => right.zIndex - left.zIndex)[0],
     [windows],
   )
-  const resolvedApps = useMemo(() => {
-    return Object.fromEntries(
-      APPS.map((baseApp) => {
-        const override = appVisualOverrides[baseApp.id]
-        return [
-          baseApp.id,
-          {
-            ...baseApp,
-            accent: override?.accent ?? baseApp.accent,
-            iconSpec: normalizeIconSpec(override?.icon ?? baseApp.icon),
-          },
-        ]
-      }),
-    ) as Record<AppId, DesktopApp & { iconSpec: DockIconSpec }>
-  }, [appVisualOverrides])
+  const visibleWindows = useMemo(
+    () =>
+      windows
+        .filter((item) => !item.minimized)
+        .sort((left, right) => left.zIndex - right.zIndex),
+    [windows],
+  )
+  const altTabCandidates = useMemo(
+    () =>
+      [...windows]
+        .filter((item) => !item.minimized && !item.genie?.removeOnFinish)
+        .sort((left, right) => right.zIndex - left.zIndex),
+    [windows],
+  )
+  const missionControlCandidates = useMemo(
+    () =>
+      [...windows]
+        .filter((item) => !item.minimized && !item.genie?.removeOnFinish)
+        .sort((left, right) => right.zIndex - left.zIndex),
+    [windows],
+  )
+  const orderedDockAppIds = useMemo(() => {
+    const pinnedAppIds = new Set(dockItems)
+    const orderedPinnedAppIds = dockPinnedOrder
+      .filter((item) => item.startsWith('app:'))
+      .map((item) => item.slice('app:'.length) as AppId)
+      .filter((item) => pinnedAppIds.has(item))
+    const runningOnlyAppIds = visibleDockAppIds.filter((item) => !pinnedAppIds.has(item))
 
+    return [...orderedPinnedAppIds, ...runningOnlyAppIds]
+  }, [dockItems, dockPinnedOrder, visibleDockAppIds])
+  const orderedCustomDockItems = useMemo(() => {
+    const itemById = new Map(customDockItems.map((item) => [item.id, item]))
+    return dockPinnedOrder
+      .filter((item) => item.startsWith('custom:'))
+      .map((item) => itemById.get(item.slice('custom:'.length)))
+      .filter((item): item is CustomDockItem => !!item)
+  }, [customDockItems, dockPinnedOrder])
+  const pinnedCustomTargets = useMemo(
+    () => new Set(customDockItems.map((item) => `${item.kind}::${item.target}`)),
+    [customDockItems],
+  )
+  const windowDockItems = useMemo(() => {
+    const next = new Map<string, CustomDockItem>()
+
+    windows.forEach((windowItem) => {
+      if (windowItem.genie?.removeOnFinish) {
+        return
+      }
+
+      if (windowItem.appId === 'finder' && windowItem.finderState) {
+        const route = getActiveFinderRoute(windowItem.finderState)
+        if (route.startsWith('desktop-folder:')) {
+          const itemId = route.slice('desktop-folder:'.length)
+          const folder = desktopItems.find((item) => item.id === itemId && item.kind === 'folder')
+          if (folder) {
+            next.set(route, {
+              id: createDockItemId('route', route),
+              name: folder.name,
+              target: route,
+              kind: 'finder-route',
+              icon: { kind: 'glyph', value: '📁' },
+              accent: 'transparent',
+            })
+          }
+          return
+        }
+
+        if (route.startsWith('volume:')) {
+          const targetPath = getVolumePathFromRoute(route)
+          const mount = getVolumeMountFromRoute(route)
+          if (targetPath && mount && targetPath.replace(/[\\/]+$/, '').toLowerCase() !== mount.replace(/[\\/]+$/, '').toLowerCase()) {
+            next.set(route, {
+              id: createDockItemId('route', route),
+              name: getPathLeaf(targetPath),
+              target: route,
+              kind: 'finder-route',
+              icon: { kind: 'glyph', value: '📁' },
+              accent: 'transparent',
+            })
+          }
+        }
+        return
+      }
+
+      if ((windowItem.appId === 'photos' || windowItem.appId === 'videos') && windowItem.mediaPath) {
+        const dockItem = createPathDockItem(windowItem.mediaPath, windowItem.title)
+        next.set(dockItem.id, dockItem)
+        return
+      }
+
+      if (windowItem.appId === 'textedit' && windowItem.textDocumentId) {
+        const target = desktopItems.find((item) => item.id === windowItem.textDocumentId && item.kind === 'text')
+        if (target) {
+          next.set(target.id, {
+            id: createDockItemId('document', target.id),
+            name: target.name,
+            target: target.id,
+            kind: 'desktop-document',
+            icon: { kind: 'image', value: getDocumentPreviewIcon(target.name, target.extension) },
+            accent: 'transparent',
+          })
+        }
+      }
+    })
+
+    return [...next.values()]
+      .filter((item) => !pinnedCustomTargets.has(`${item.kind}::${item.target}`))
+  }, [desktopItems, pinnedCustomTargets, windows])
+  const visibleTransientDockItems = useMemo(() => {
+    const runtimeOnlyItems = runtimeDockItems.filter((item) => !pinnedCustomTargets.has(`${item.kind}::${item.target}`))
+    return [...windowDockItems, ...runtimeOnlyItems].filter(
+      (item, index, current) => current.findIndex((entry) => entry.id === item.id) === index,
+    )
+  }, [pinnedCustomTargets, runtimeDockItems, windowDockItems])
+  const spotlightResults = useMemo(() => {
+    const query = spotlightQuery.trim()
+    const results: Array<{
+      id: string
+      kind: 'app' | 'installed-app' | 'note' | 'document' | 'volume' | 'route' | 'path' | 'action'
+      title: string
+      subtitle: string
+      score: number
+      appId?: AppId
+      app?: InstalledApp
+      noteId?: string
+      itemId?: string
+      route?: FinderRoute
+      mount?: string
+      path?: string
+      actionId?: 'new-note' | 'open-apps' | 'open-dock' | 'open-device' | 'toggle-dark' | 'toggle-light'
+      icon?: DockIconSpec
+    }> = []
+
+    const pushResult = (entry: Omit<(typeof results)[number], 'score'>, sources: string[], defaultScore = 48) => {
+      const score = query ? getSearchScore(query, ...sources) : defaultScore
+      if (query && score < 0) {
+        return
+      }
+      results.push({ ...entry, score })
+    }
+
+    recentItems.forEach((item, index) => {
+      if (item.kind === 'installed-app') {
+        const app = installedApps.find((entry) => entry.id === item.installedAppId)
+        if (!app) {
+          return
+        }
+
+        pushResult(
+          {
+            id: `recent-installed:${item.installedAppId}`,
+            kind: 'installed-app',
+            title: item.title,
+            subtitle: `Reciente · ${item.subtitle}`,
+            app,
+          },
+          [item.title, item.subtitle, 'reciente recientes'],
+          140 - index,
+        )
+        return
+      }
+
+      pushResult(
+        {
+          id: `recent:${item.key}`,
+          kind: item.kind,
+          title: item.title,
+          subtitle: `Reciente · ${item.subtitle}`,
+          appId: item.appId,
+          noteId: item.noteId,
+          itemId: item.itemId,
+          route: item.route,
+          mount: item.mount,
+          path: item.path,
+          icon: item.icon,
+        },
+        [item.title, item.subtitle, item.path ?? '', 'reciente recientes'],
+        140 - index,
+      )
+    })
+
+    APPS
+      .filter((app) => app.id !== 'launcher')
+      .forEach((app) => {
+        const resolved = resolvedApps[app.id]
+        pushResult(
+          {
+            id: `app:${app.id}`,
+            kind: 'app',
+            title: resolved.name,
+            subtitle: 'App integrada',
+            appId: app.id,
+            icon: resolved.iconSpec,
+          },
+          [resolved.name, app.id, resolved.menu.join(' ')],
+        )
+      })
+
+    installedApps.forEach((app) => {
+      pushResult(
+        {
+          id: `installed:${app.id}`,
+          kind: 'installed-app',
+          title: app.name,
+          subtitle: `Sistema · ${app.source}`,
+          app,
+        },
+        [app.name, app.source, app.target, app.launchTarget ?? ''],
+      )
+    })
+
+    notes.forEach((note) => {
+      pushResult(
+        {
+          id: `note:${note.id}`,
+          kind: 'note',
+          title: note.title || 'Sin titulo',
+          subtitle: note.body.trim() || 'Nota',
+          noteId: note.id,
+          icon: { kind: 'glyph', value: '📝' },
+        },
+        [note.title, note.body, 'nota notas'],
+      )
+    })
+
+    desktopItems
+      .filter((item) => item.kind === 'text' && item.trashedAt === null)
+      .forEach((item) => {
+        pushResult(
+          {
+            id: `document:${item.id}`,
+            kind: 'document',
+            title: item.name,
+            subtitle: item.content.trim() || 'Documento de texto',
+            itemId: item.id,
+            icon: item.iconDataUrl ? { kind: 'image', value: item.iconDataUrl } : { kind: 'glyph', value: '📄' },
+          },
+          [item.name, item.content, 'documento texto'],
+        )
+      })
+
+    ;(deviceInfo?.volumes ?? []).forEach((volume) => {
+      pushResult(
+        {
+          id: `volume:${volume.mount}`,
+          kind: 'volume',
+          title: volume.name,
+          subtitle: `${volume.mount} · ${volume.freeGb} GB libres`,
+          mount: volume.mount,
+          icon: { kind: 'image', value: getDesktopVolumeIconSrc(volume) },
+        },
+        [volume.name, volume.mount, 'volumen disco unidad almacenamiento'],
+      )
+    })
+
+    ;([
+      {
+        id: 'route:applications',
+        title: 'Aplicaciones',
+        subtitle: 'Abrir Finder en Aplicaciones',
+        route: 'applications' as const,
+        icon: { kind: 'glyph' as const, value: 'A' },
+      },
+      {
+        id: 'route:dock',
+        title: 'Dock',
+        subtitle: 'Abrir Finder en la configuracion del dock',
+        route: 'dock' as const,
+        icon: { kind: 'glyph' as const, value: '⚓' },
+      },
+      {
+        id: 'route:device',
+        title: 'Este dispositivo',
+        subtitle: 'Abrir informacion del equipo',
+        route: 'device' as const,
+        icon: { kind: 'glyph' as const, value: '💻' },
+      },
+      {
+        id: 'route:trash',
+        title: 'Papelera',
+        subtitle: 'Abrir la papelera',
+        route: 'trash' as const,
+        icon: { kind: 'glyph' as const, value: '🗑' },
+      },
+      {
+        id: 'route:recents',
+        title: 'Recientes',
+        subtitle: 'Abrir Finder en Recientes',
+        route: 'recents' as const,
+        icon: { kind: 'glyph' as const, value: '◷' },
+      },
+    ]).forEach((item) => {
+      pushResult(
+        {
+          id: item.id,
+          kind: 'route',
+          title: item.title,
+          subtitle: item.subtitle,
+          route: item.route,
+          icon: item.icon,
+        },
+        [item.title, item.subtitle],
+      )
+    })
+
+    ;([
+      {
+        id: 'action:new-note',
+        title: 'Crear nota nueva',
+        subtitle: 'Abrir Notas y crear una nota',
+        actionId: 'new-note' as const,
+        icon: { kind: 'glyph' as const, value: '✎' },
+      },
+      {
+        id: 'action:toggle-dark',
+        title: 'Modo oscuro',
+        subtitle: 'Cambiar la apariencia a oscuro',
+        actionId: 'toggle-dark' as const,
+        icon: { kind: 'glyph' as const, value: '☾' },
+      },
+      {
+        id: 'action:toggle-light',
+        title: 'Modo claro',
+        subtitle: 'Cambiar la apariencia a claro',
+        actionId: 'toggle-light' as const,
+        icon: { kind: 'glyph' as const, value: '☀' },
+      },
+    ]).forEach((item) => {
+      pushResult(
+        {
+          id: item.id,
+          kind: 'action',
+          title: item.title,
+          subtitle: item.subtitle,
+          actionId: item.actionId,
+          icon: item.icon,
+        },
+        [item.title, item.subtitle],
+      )
+    })
+
+    return results
+      .sort((left, right) => right.score - left.score || left.title.localeCompare(right.title, 'es'))
+      .slice(0, query ? 14 : 10)
+  }, [desktopItems, deviceInfo?.volumes, installedApps, notes, recentItems, resolvedApps, spotlightQuery])
+  const desktopItemNodes = useMemo(() => rootDesktopItems.map((item) => (
+    <button
+      key={item.id}
+      type="button"
+      className={`desktop-item-icon${quickLookCandidate?.key === `desktop:${item.id}` ? ' selected' : ''}`}
+      data-desktop-folder-id={item.kind === 'folder' ? item.id : undefined}
+      style={{ left: item.x, top: item.y }}
+      onPointerDown={(event) => {
+        updateQuickLookCandidate(createQuickLookTargetFromDesktopItem(item))
+        startDesktopItemDrag(event, item.id)
+      }}
+      onClick={(event) => {
+        if (editingDesktopItemId === item.id) {
+          return
+        }
+        if (event.detail < 2) {
+          return
+        }
+        if (item.kind === 'folder') {
+          openDesktopFolder(item.id)
+        } else if (item.kind === 'text') {
+          openDesktopDocument(item.id)
+        } else {
+          openDesktopFileItem(item.id)
+        }
+      }}
+      onContextMenu={(event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        updateQuickLookCandidate(createQuickLookTargetFromDesktopItem(item))
+        openContextMenuAt({
+          type: 'desktop-item',
+          itemId: item.id,
+          label: item.name,
+          kind: item.kind,
+        }, event.clientX, event.clientY)
+      }}
+      onDragOver={(event) => {
+        if (item.kind !== 'folder') {
+          return
+        }
+        handleDesktopItemFolderDragOver(event)
+      }}
+      onDrop={(event) => {
+        if (item.kind !== 'folder') {
+          return
+        }
+        handleDesktopItemFolderDrop(event, item.id)
+      }}
+    >
+      {item.kind === 'folder' ? (
+        <span
+          className="desktop-item-art folder"
+          style={{ backgroundImage: `url("${resolvePublicAssetPath('/carp.png')}")` }}
+          aria-hidden="true"
+        />
+      ) : item.kind === 'file' && item.sourcePath && isImageEntry({
+        name: item.name,
+        path: item.sourcePath,
+        kind: 'file',
+        extension: item.extension,
+        sizeBytes: null,
+      }) ? (
+        <img className="desktop-item-art image-preview" src={getMediaSource(item.sourcePath)} alt="" draggable={false} />
+      ) : item.kind === 'file' && item.sourcePath && isVideoEntry({
+        name: item.name,
+        path: item.sourcePath,
+        kind: 'file',
+        extension: item.extension,
+        sizeBytes: null,
+      }) ? (
+        <VideoThumbnail
+          className="desktop-item-art video-preview"
+          src={getMediaSource(item.sourcePath)}
+          fallbackSrc={getDocumentPreviewIcon(item.name, item.extension ?? '')}
+        />
+      ) : item.kind === 'file' && item.iconDataUrl ? (
+        <img className="desktop-item-art custom-icon" src={item.iconDataUrl} alt="" draggable={false} />
+      ) : item.kind === 'file' && item.extension ? (
+        <img
+          className="desktop-item-art custom-icon"
+          src={getDocumentPreviewIcon(item.name, item.extension)}
+          alt=""
+          draggable={false}
+        />
+      ) : (
+        <img className="desktop-item-art text" src={resolvePublicAssetPath('/texto.png')} alt="" draggable={false} />
+      )}
+      {editingDesktopItemId === item.id ? (
+        <input
+          className="desktop-item-name-input"
+          value={editingDesktopItemName}
+          autoFocus
+          onChange={(event) => setEditingDesktopItemName(event.target.value)}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onBlur={() => commitDesktopItemRename(item.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              commitDesktopItemRename(item.id)
+            }
+            if (event.key === 'Escape') {
+              event.preventDefault()
+              cancelDesktopItemRename()
+            }
+          }}
+        />
+      ) : (
+        <strong>{item.name}</strong>
+      )}
+      <span>{item.kind === 'folder' ? 'Carpeta' : item.kind === 'text' ? 'Documento' : item.extension || 'Archivo'}</span>
+    </button>
+  )), [editingDesktopItemId, editingDesktopItemName, quickLookCandidate?.key, rootDesktopItems])
+  const desktopVolumeNodes = useMemo(() => (deviceInfo?.volumes ?? []).map((volume, index) => {
+    const position = getDesktopVolumePosition(volume, index)
+    return (
+      <button
+        key={volume.mount}
+        type="button"
+        className="desktop-volume-icon"
+        style={{ left: position.x, top: position.y }}
+        onPointerDown={(event) => startDesktopVolumeDrag(event, volume.mount)}
+        onClick={() => openDesktopVolume(volume.mount)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          event.stopPropagation()
+          openContextMenuAt({
+            type: 'dock-volume',
+            mount: volume.mount,
+            label: volume.name,
+          }, event.clientX, event.clientY)
+        }}
+      >
+        <img
+          className={`desktop-volume-art ${getDesktopVolumeKind(volume)}`}
+          src={resolvePublicAssetPath(getDesktopVolumeIconSrc(volume))}
+          alt=""
+          draggable={false}
+        />
+        <strong>{volume.name}</strong>
+        <span>{formatVolumeLabel(volume.mount)}</span>
+      </button>
+    )
+  }), [desktopVolumePositions, deviceInfo?.volumes])
   function openContextMenuAt(payload: Record<string, unknown>, x: number, y: number) {
     const estimatedWidth = 240
     const estimatedHeight = 180
@@ -1552,6 +1488,354 @@ function App() {
     }
 
     return getFinderLabel(route) ?? 'Finder'
+  }
+
+  function sortDesktopEntries(items: DesktopItem[], sortMode: FinderSortMode) {
+    return [...items].sort((left, right) => {
+      if (left.kind !== right.kind) {
+        return left.kind === 'folder' ? -1 : 1
+      }
+
+      if (sortMode === 'date') {
+        return right.updatedAt - left.updatedAt || left.name.localeCompare(right.name, 'es')
+      }
+
+      if (sortMode === 'type') {
+        const leftType = left.kind === 'folder' ? 'Carpeta' : left.kind === 'text' ? 'Documento' : left.extension || 'Archivo'
+        const rightType = right.kind === 'folder' ? 'Carpeta' : right.kind === 'text' ? 'Documento' : right.extension || 'Archivo'
+        return leftType.localeCompare(rightType, 'es') || left.name.localeCompare(right.name, 'es')
+      }
+
+      return left.name.localeCompare(right.name, 'es')
+    })
+  }
+
+  function sortVolumeEntries(entries: VolumeEntry[], sortMode: FinderSortMode) {
+    return [...entries].sort((left, right) => {
+      if (left.kind !== right.kind) {
+        return left.kind === 'directory' ? -1 : 1
+      }
+
+      if (sortMode === 'size') {
+        return (right.sizeBytes ?? -1) - (left.sizeBytes ?? -1) || left.name.localeCompare(right.name, 'es')
+      }
+
+      if (sortMode === 'type') {
+        const leftType = left.kind === 'directory' ? 'Carpeta' : left.extension || 'Archivo'
+        const rightType = right.kind === 'directory' ? 'Carpeta' : right.extension || 'Archivo'
+        return leftType.localeCompare(rightType, 'es') || left.name.localeCompare(right.name, 'es')
+      }
+
+      return left.name.localeCompare(right.name, 'es')
+    })
+  }
+
+  function createQuickLookTargetFromDesktopItem(item: DesktopItem): QuickLookTarget {
+    if (item.kind === 'folder') {
+      return {
+        key: `desktop:${item.id}`,
+        name: item.name,
+        subtitle: item.sourcePath ? 'Carpeta enlazada' : 'Carpeta',
+        kind: 'folder',
+        iconSrc: resolvePublicAssetPath('/carp.png'),
+        location: item.sourcePath ?? 'Escritorio',
+      }
+    }
+
+    if (item.kind === 'text') {
+      return {
+        key: `desktop:${item.id}`,
+        name: item.name,
+        subtitle: 'Documento de texto',
+        kind: 'text',
+        iconSrc: resolvePublicAssetPath('/texto.png'),
+        textContent: item.content,
+        location: 'Escritorio',
+      }
+    }
+
+    const entry: VolumeEntry = {
+      name: item.name,
+      path: item.sourcePath ?? '',
+      kind: 'file',
+      extension: item.extension,
+      sizeBytes: null,
+      icon: item.iconDataUrl,
+    }
+
+    return {
+      key: `desktop:${item.id}`,
+      name: item.name,
+      subtitle: item.extension || 'Archivo',
+      kind: item.sourcePath && isImageEntry(entry) ? 'image' : item.sourcePath && isVideoEntry(entry) ? 'video' : 'file',
+      path: item.sourcePath,
+      extension: item.extension,
+      iconSrc: item.iconDataUrl ?? getDocumentPreviewIcon(item.name, item.extension || ''),
+      location: item.sourcePath ? getPathLeaf(item.sourcePath) : 'Escritorio',
+    }
+  }
+
+  function createQuickLookTargetFromVolumeEntry(entry: VolumeEntry): QuickLookTarget {
+    return {
+      key: `path:${entry.path}`,
+      name: entry.name,
+      subtitle:
+        entry.kind === 'directory'
+          ? 'Carpeta'
+          : entry.sizeBytes === null
+            ? entry.extension || 'Archivo'
+            : `${entry.extension || 'Archivo'} · ${entry.sizeBytes} B`,
+      kind: entry.kind === 'directory' ? 'folder' : isImageEntry(entry) ? 'image' : isVideoEntry(entry) ? 'video' : 'file',
+      path: entry.path,
+      extension: entry.extension,
+      iconSrc: entry.kind === 'directory'
+        ? resolvePublicAssetPath('/carp.png')
+        : entry.icon ?? getDocumentPreviewIcon(entry.name, entry.extension || ''),
+      location: entry.path,
+    }
+  }
+
+  function updateQuickLookCandidate(target: QuickLookTarget | null) {
+    setQuickLookCandidate(target)
+  }
+
+  function getWindowDisplayTitle(windowItem: WindowState) {
+    return windowItem.appId === 'finder'
+      ? `Finder · ${getFinderRouteLabel(getActiveFinderRoute(windowItem.finderState))}`
+      : windowItem.title
+  }
+
+  function getDockFolderStackEntries(item: CustomDockItem): DockFolderStackEntry[] | null {
+    if (item.kind !== 'finder-route') {
+      return null
+    }
+
+    const route = item.target as FinderRoute
+    const openDesktopItem = (target: DesktopItem) => () => {
+      setDockFolderStackItemId(null)
+      if (target.kind === 'folder') {
+        openOrFocusFinderRoute(createDesktopFolderRoute(target.id), item.id)
+        return
+      }
+      if (target.kind === 'text') {
+        openDesktopDocument(target.id)
+        return
+      }
+      openDesktopFileItem(target.id)
+    }
+    const openVolumeEntry = (mount: string, entry: VolumeEntry) => () => {
+      setDockFolderStackItemId(null)
+      if (entry.kind === 'directory') {
+        openOrFocusFinderRoute(createVolumeSubRoute(mount, entry.path), item.id)
+        return
+      }
+      if (isImageEntry(entry)) {
+        openMediaWindow('photos', entry)
+        return
+      }
+      if (isVideoEntry(entry)) {
+        openMediaWindow('videos', entry)
+        return
+      }
+      void openTrackedSystemPath(entry.path, entry.name, entry.icon ?? null)
+    }
+    const desktopItemToEntry = (target: DesktopItem): DockFolderStackEntry => ({
+      key: `desktop:${target.id}`,
+      title: target.name,
+      subtitle: target.kind === 'folder' ? 'Carpeta' : target.kind === 'text' ? 'Documento de texto' : target.extension || 'Archivo',
+      icon: target.kind === 'folder'
+        ? { kind: 'image', value: resolvePublicAssetPath('/carp.png') }
+        : target.iconDataUrl
+          ? { kind: 'image', value: target.iconDataUrl }
+          : target.extension
+            ? { kind: 'image', value: getDocumentPreviewIcon(target.name, target.extension) }
+            : { kind: 'glyph', value: '📄' },
+      action: openDesktopItem(target),
+    })
+    const volumeEntryToEntry = (mount: string, entry: VolumeEntry): DockFolderStackEntry => ({
+      key: `volume:${entry.path}`,
+      title: entry.name,
+      subtitle: entry.kind === 'directory' ? 'Carpeta' : entry.sizeBytes === null ? 'Archivo' : `${Math.max(1, Math.round(entry.sizeBytes / 1024))} KB`,
+      icon: entry.kind === 'directory'
+        ? { kind: 'image', value: resolvePublicAssetPath('/carp.png') }
+        : entry.icon
+          ? { kind: 'image', value: entry.icon }
+          : entry.extension
+            ? { kind: 'image', value: getDocumentPreviewIcon(entry.name, entry.extension) }
+            : { kind: 'glyph', value: '📄' },
+      action: openVolumeEntry(mount, entry),
+    })
+
+    if (route === 'desktop') {
+      return sortDesktopEntries(rootDesktopItems, 'name').slice(0, 12).map(desktopItemToEntry)
+    }
+
+    const desktopFolderId = getDesktopFolderIdFromRoute(route)
+    if (desktopFolderId) {
+      const folder = desktopItems.find((entry) => entry.id === desktopFolderId && entry.kind === 'folder' && entry.trashedAt === null)
+      if (!folder) {
+        return null
+      }
+
+      if (folder.sourcePath) {
+        const entries = sortVolumeEntries(getVisibleEntries(folder.sourcePath, volumeEntriesByMount[folder.sourcePath] ?? []), 'name')
+        return entries.slice(0, 12).map((entry) => ({
+          key: `imported:${entry.path}`,
+          title: entry.name,
+          subtitle: entry.kind === 'directory' ? 'Carpeta' : entry.sizeBytes === null ? 'Archivo' : `${Math.max(1, Math.round(entry.sizeBytes / 1024))} KB`,
+          icon: entry.kind === 'directory'
+            ? { kind: 'image', value: resolvePublicAssetPath('/carp.png') }
+            : entry.icon
+              ? { kind: 'image', value: entry.icon }
+              : entry.extension
+                ? { kind: 'image', value: getDocumentPreviewIcon(entry.name, entry.extension) }
+                : { kind: 'glyph', value: '📄' },
+          action: () => {
+            setDockFolderStackItemId(null)
+            if (entry.kind === 'directory') {
+              openFinderWindow(createFinderRouteForFilePath(entry.path))
+              return
+            }
+            if (isImageEntry(entry)) {
+              openMediaWindow('photos', entry)
+              return
+            }
+            if (isVideoEntry(entry)) {
+              openMediaWindow('videos', entry)
+              return
+            }
+            void openTrackedSystemPath(entry.path, entry.name, entry.icon ?? null)
+          },
+        }))
+      }
+
+      const children = desktopItems.filter((entry) => entry.parentId === desktopFolderId && entry.trashedAt === null)
+      return sortDesktopEntries(children, 'name').slice(0, 12).map(desktopItemToEntry)
+    }
+
+    if (isVolumeRoute(route)) {
+      const mount = getVolumeMountFromRoute(route)
+      const targetPath = getVolumePathFromRoute(route)
+      if (!mount || !targetPath) {
+        return null
+      }
+      const entries = sortVolumeEntries(getVisibleEntries(targetPath, volumeEntriesByMount[targetPath] ?? []), 'name')
+      return entries.slice(0, 12).map((entry) => volumeEntryToEntry(mount, entry))
+    }
+
+    return null
+  }
+
+  function renderDockFolderStack() {
+    if (!dockFolderStackItemId) {
+      return null
+    }
+
+    const dockItem = [...orderedCustomDockItems, ...visibleTransientDockItems].find((entry) => entry.id === dockFolderStackItemId)
+    if (!dockItem) {
+      return null
+    }
+
+    const entries = getDockFolderStackEntries(dockItem)
+    if (!entries?.length) {
+      return null
+    }
+
+      const anchor = dockItemRefs.current[dockItem.id]?.getBoundingClientRect()
+      const estimatedStackHeight = entries.length * 59 + 82
+      const availableHeight = anchor ? Math.max(anchor.top - 28, 220) : window.innerHeight - 180
+      const shouldUseWindowStack = estimatedStackHeight > availableHeight
+      const stackStyle: CSSProperties = anchor
+        ? {
+            left: anchor.left + anchor.width / 2,
+            bottom: Math.max(window.innerHeight - anchor.top + 14, 108),
+          }
+        : { left: '50%', bottom: 108 }
+
+        return (
+        <div
+          ref={dockFolderStackRef}
+          className={`dock-folder-stack${shouldUseWindowStack ? ' dock-folder-stack-window' : ''}`}
+          style={stackStyle}
+        >
+          <div className="dock-folder-stack-list">
+            {shouldUseWindowStack ? (
+              <div className="dock-folder-stack-header">
+                <span className="dock-folder-stack-header-icon">{renderDockIconContent(dockItem.icon)}</span>
+                <div className="dock-folder-stack-header-copy">
+                  <strong>{dockItem.name}</strong>
+                  <span>{entries.length} elemento{entries.length === 1 ? '' : 's'}</span>
+                </div>
+              </div>
+            ) : null}
+            {entries.map((entry, index) => (
+                (() => {
+                  const visualIndex = entries.length - index - 1
+                  return (
+                <button
+                  key={entry.key}
+                  type="button"
+                  className={`dock-folder-stack-item${shouldUseWindowStack ? ' windowed' : ''}`}
+                  style={{
+                  '--stack-tilt': shouldUseWindowStack ? '0deg' : `${4 + visualIndex * 3}deg`,
+                  '--stack-shift': shouldUseWindowStack ? '0px' : `${visualIndex * 7}px`,
+                  '--stack-delay': shouldUseWindowStack ? '0ms' : `${visualIndex * 52}ms`,
+                  } as CSSProperties}
+                  onClick={entry.action}
+                >
+                <span className="dock-folder-stack-icon">{renderDockIconContent(entry.icon)}</span>
+                <span className="dock-folder-stack-copy">
+                  <strong>{entry.title}</strong>
+                  <span>{entry.subtitle}</span>
+                </span>
+              </button>
+                )
+              })()
+            ))}
+          </div>
+        </div>
+      )
+    }
+
+  function openQuickLook(target = quickLookCandidate) {
+    if (!target) {
+      return
+    }
+
+    setLauncherOpen(false)
+    setContextMenu(null)
+    setControlCenterOpen(false)
+    setOpenAppMenu(null)
+    setPowerMenuOpen(false)
+    setSpotlightOpen(false)
+    setQuickLookTarget(target)
+  }
+
+  function closeQuickLook() {
+    setQuickLookTarget(null)
+  }
+
+  function openMissionControl(initialIndex = 0) {
+    if (missionControlCandidates.length === 0) {
+      return
+    }
+
+    setLauncherOpen(false)
+    setContextMenu(null)
+    setControlCenterOpen(false)
+    setOpenAppMenu(null)
+    setPowerMenuOpen(false)
+    setSpotlightOpen(false)
+    setQuickLookTarget(null)
+    setAltTabState({ open: false, selectedIndex: 0 })
+    setMissionControlState({
+      open: true,
+      selectedIndex: clamp(initialIndex, 0, Math.max(0, missionControlCandidates.length - 1)),
+    })
+  }
+
+  function closeMissionControl() {
+    setMissionControlState({ open: false, selectedIndex: 0 })
   }
 
   function getDesktopVolumePosition(volume: VolumeInfo, index: number) {
@@ -1629,6 +1913,11 @@ function App() {
   }
 
   function queueDockMouseUpdate(pageX: number) {
+    if (!dockHoverAnimationEnabled) {
+      dockMouseX.set(Infinity)
+      return
+    }
+
     pendingDockMouseX.current = pageX
     if (dockMouseFrameRef.current !== null) {
       return
@@ -1642,26 +1931,6 @@ function App() {
 
   function getResolvedApp(appId: AppId) {
     return resolvedApps[appId]
-  }
-
-  function readIconFile(file: File, onLoad: (value: string) => void) {
-    const reader = new FileReader()
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        onLoad(reader.result)
-      }
-    }
-    reader.readAsDataURL(file)
-  }
-
-  function readWallpaperFile(file: File, onLoad: (selection: WallpaperSelection) => void) {
-    readIconFile(file, (value) => {
-      onLoad({
-        kind: 'upload',
-        value,
-        name: file.name.replace(/\.[^.]+$/, ''),
-      })
-    })
   }
 
   function updateAppVisual(appId: AppId, patch: { icon?: DockIconSpec; accent?: string }) {
@@ -1763,31 +2032,6 @@ function App() {
   }
 
   useEffect(() => {
-    let cancelled = false
-    async function loadIdentity() {
-      try {
-        const device = window.electronDesktop
-          ? await window.electronDesktop.getDeviceInfo() as DeviceInfo
-          : await fetch('/api/device-info').then((response) => {
-              if (!response.ok) throw new Error('No fue posible leer los datos del dispositivo')
-              return response.json() as Promise<DeviceInfo>
-            })
-
-        if (!cancelled) {
-          setDeviceInfo((current) => current ?? device)
-        }
-      } catch {
-        // Mantiene fallback local si no hay identidad disponible.
-      }
-    }
-
-    void loadIdentity()
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
-  useEffect(() => {
     if (!loginTransitioning) {
       return undefined
     }
@@ -1824,6 +2068,17 @@ function App() {
   }, [])
 
   useEffect(() => {
+    function handleDockStackPointerDown(event: MouseEvent) {
+      if (!dockFolderStackRef.current?.contains(event.target as Node | null)) {
+        setDockFolderStackItemId(null)
+      }
+    }
+
+    window.addEventListener('mousedown', handleDockStackPointerDown)
+    return () => window.removeEventListener('mousedown', handleDockStackPointerDown)
+  }, [])
+
+  useEffect(() => {
     function closePowerMenu(event: MouseEvent) {
       const target = event.target as Node | null
       if (powerMenuRef.current?.contains(target ?? null)) {
@@ -1837,36 +2092,26 @@ function App() {
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem(DOCK_STORAGE_KEY, JSON.stringify(dockItems))
-  }, [dockItems])
-
-  useEffect(() => {
-    window.localStorage.setItem(CUSTOM_DOCK_STORAGE_KEY, JSON.stringify(customDockItems))
-  }, [customDockItems])
-
-  useEffect(() => {
-    window.localStorage.setItem(APP_VISUAL_STORAGE_KEY, JSON.stringify(appVisualOverrides))
-  }, [appVisualOverrides])
-
-  useEffect(() => {
     window.localStorage.setItem(DESKTOP_VOLUME_POSITIONS_STORAGE_KEY, JSON.stringify(desktopVolumePositions))
   }, [desktopVolumePositions])
 
   useEffect(() => {
-    window.localStorage.setItem(APPEARANCE_MODE_STORAGE_KEY, appearanceMode)
-  }, [appearanceMode])
+    if (typeof window === 'undefined' || !window.matchMedia) {
+      return undefined
+    }
+
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const syncPreference = () => setPrefersReducedMotion(mediaQuery.matches)
+    syncPreference()
+    mediaQuery.addEventListener('change', syncPreference)
+    return () => mediaQuery.removeEventListener('change', syncPreference)
+  }, [])
 
   useEffect(() => {
-    window.electronDesktop?.browser.setAppearance(appearanceMode)
-  }, [appearanceMode])
-
-  useEffect(() => {
-    window.localStorage.setItem(DESKTOP_WALLPAPER_STORAGE_KEY, JSON.stringify(desktopWallpaper))
-  }, [desktopWallpaper])
-
-  useEffect(() => {
-    window.localStorage.setItem(LOGIN_WALLPAPER_STORAGE_KEY, JSON.stringify(loginWallpaper))
-  }, [loginWallpaper])
+    return () => {
+      Object.values(windowMorphTimersRef.current).forEach((timer) => window.clearTimeout(timer))
+    }
+  }, [])
 
   useEffect(() => {
     window.localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(notes))
@@ -1879,96 +2124,57 @@ function App() {
   }, [notes, selectedNoteId])
 
   useEffect(() => {
-    window.localStorage.setItem(DESKTOP_ITEMS_STORAGE_KEY, JSON.stringify(desktopItems))
-  }, [desktopItems])
+    window.localStorage.setItem(RECENT_ITEMS_STORAGE_KEY, JSON.stringify(recentItems))
+  }, [recentItems])
 
   useEffect(() => {
-    if (desktopTrashPosition) {
-      window.localStorage.setItem(DESKTOP_TRASH_POSITION_STORAGE_KEY, JSON.stringify(desktopTrashPosition))
-    }
-  }, [desktopTrashPosition])
-
-  useEffect(() => {
-    if (!loggedIn) {
+    if (!loggedIn || sessionHydratedRef.current) {
       return
     }
 
-    let cancelled = false
-    async function loadSystemData() {
-      setLoadingSystem(true)
-      setSystemError(null)
-      try {
-        const [device, apps] = window.electronDesktop
-          ? await Promise.all([
-              window.electronDesktop.getDeviceInfo() as Promise<DeviceInfo>,
-              window.electronDesktop.getInstalledApps() as Promise<InstalledApp[]>,
-            ])
-          : await Promise.all([
-              fetch('/api/device-info').then((response) => {
-                if (!response.ok) throw new Error('No fue posible leer los datos del dispositivo')
-                return response.json() as Promise<DeviceInfo>
-              }),
-              fetch('/api/apps').then((response) => {
-                if (!response.ok) throw new Error('No fue posible leer las aplicaciones')
-                return response.json() as Promise<InstalledApp[]>
-              }),
-            ])
-
-        if (!cancelled) {
-          setDeviceInfo(device)
-          setInstalledApps(apps)
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setSystemError(error instanceof Error ? error.message : 'Error desconocido')
-        }
-      } finally {
-        if (!cancelled) {
-          setLoadingSystem(false)
-        }
-      }
-    }
-
-    void loadSystemData()
-    return () => {
-      cancelled = true
-    }
-  }, [loggedIn])
-
-  useEffect(() => {
-    if (!loggedIn) {
+    sessionHydratedRef.current = true
+    const saved = loadWindowSession()
+    if (!saved.length) {
       return
     }
 
-    let cancelled = false
-    async function loadControls() {
-      try {
-        const controls = window.electronDesktop
-          ? await window.electronDesktop.getSystemControls() as SystemControlsState
-          : await fetch('/api/system-controls').then((response) => {
-              if (!response.ok) throw new Error('No fue posible leer los controles del sistema')
-              return response.json() as Promise<SystemControlsState>
-            })
-
-        if (!cancelled) {
-          setSystemControls(controls)
-        }
-      } catch {
-        if (!cancelled) {
-          setSystemControls((current) => ({
-            ...current,
-            supportsBrightness: false,
-            supportsVolume: false,
-          }))
-        }
+    const restored = saved.map((entry, index) => {
+      const route = entry.finderState
+        ? entry.finderState.tabs.find((tab) => tab.id === entry.finderState?.activeTabId)?.history[
+          entry.finderState.tabs.find((tab) => tab.id === entry.finderState?.activeTabId)?.historyIndex ?? 0
+        ] ?? 'computer'
+        : undefined
+      const nextWindow = createWindow(entry.appId, route)
+      return {
+        ...nextWindow,
+        ...entry,
+        genie: null,
+        zIndex: index + 1,
       }
+    })
+
+    setWindows(restored)
+    const maxWindowSequence = restored.reduce((maxValue, item) => {
+      const parts = item.id.split('-')
+      const suffix = Number(parts[parts.length - 1])
+      return Number.isFinite(suffix) ? Math.max(maxValue, suffix) : maxValue
+    }, 1)
+    nextWindowId.current = maxWindowSequence + 1
+    pushToast('Sesion restaurada', `${restored.length} ventana${restored.length === 1 ? '' : 's'} recuperada${restored.length === 1 ? '' : 's'}.`)
+  }, [loggedIn])
+
+  useEffect(() => {
+    if (!loggedIn || !sessionHydratedRef.current) {
+      return
     }
 
-    void loadControls()
-    return () => {
-      cancelled = true
-    }
-  }, [loggedIn])
+    const serialized = windows
+      .map((item) => serializeWindowForSession(item))
+      .filter((item): item is WindowSessionEntry => !!item)
+      .sort((left, right) => left.zIndex - right.zIndex)
+
+    window.localStorage.setItem(WINDOW_SESSION_STORAGE_KEY, JSON.stringify(serialized))
+  }, [loggedIn, windows])
 
   useEffect(() => {
     if (!drag) {
@@ -2071,6 +2277,73 @@ function App() {
   }, [resize, windows])
 
   useEffect(() => {
+    setDockPinnedOrder((current) => syncDockPinnedOrder(current, dockItems, customDockItems))
+  }, [dockItems, customDockItems, visibleTransientDockItems, visibleVolumeDockItems])
+
+  useEffect(() => {
+    if (!installedApps.length) {
+      return
+    }
+
+    setCustomDockItems((current) => {
+      const appsByTarget = new Map<string, InstalledApp>()
+      const appsByName = new Map<string, InstalledApp>()
+
+      installedApps.forEach((app) => {
+        const launchTarget = (app.launchTarget || app.target || '').trim().toLowerCase()
+        const target = (app.target || '').trim().toLowerCase()
+        const normalizedName = app.name.trim().toLowerCase()
+
+        if (launchTarget && !appsByTarget.has(launchTarget)) {
+          appsByTarget.set(launchTarget, app)
+        }
+        if (target && !appsByTarget.has(target)) {
+          appsByTarget.set(target, app)
+        }
+        if (normalizedName && !appsByName.has(normalizedName)) {
+          appsByName.set(normalizedName, app)
+        }
+      })
+
+      let changed = false
+      const next = current.map((item) => {
+        if (item.kind !== 'app') {
+          return item
+        }
+
+        const currentTarget = item.target.trim().toLowerCase()
+        const currentName = item.name.trim().toLowerCase()
+        const match = appsByTarget.get(currentTarget) ?? appsByName.get(currentName)
+        if (!match?.icon) {
+          return item
+        }
+
+        const shouldReplaceIcon =
+          item.icon.kind !== 'image' ||
+          !item.icon.value ||
+          item.icon.value === '/app.png' ||
+          item.icon.value.startsWith('data:') === false
+
+        if (!shouldReplaceIcon || item.icon.value === match.icon) {
+          return item
+        }
+
+        changed = true
+        return {
+          ...item,
+          icon: { kind: 'image' as const, value: match.icon },
+        }
+      })
+
+      return changed ? next : current
+    })
+  }, [installedApps, setCustomDockItems])
+
+  useEffect(() => {
+    window.localStorage.setItem(DOCK_PINNED_ORDER_STORAGE_KEY, JSON.stringify(dockPinnedOrder))
+  }, [dockPinnedOrder])
+
+  useEffect(() => {
     function closeContextMenu() {
       setContextMenu(null)
     }
@@ -2095,16 +2368,446 @@ function App() {
   }, [])
 
   useEffect(() => {
+    function closeStatusMenus(event: MouseEvent) {
+      const target = event.target as Node | null
+      if (statusMenusRef.current?.contains(target ?? null)) {
+        return
+      }
+      setStatusMenuOpen(null)
+    }
+
+    window.addEventListener('mousedown', closeStatusMenus)
+    return () => window.removeEventListener('mousedown', closeStatusMenus)
+  }, [])
+
+  useEffect(() => {
     if (!launcherOpen) {
       setLauncherPage(0)
     }
   }, [launcherOpen])
+
+  useEffect(() => {
+    if (!spotlightOpen) {
+      return
+    }
+
+    setSpotlightSelectionIndex(0)
+    window.setTimeout(() => {
+      spotlightInputRef.current?.focus()
+      spotlightInputRef.current?.select()
+    }, 0)
+  }, [spotlightOpen, spotlightQuery])
+
+  useEffect(() => {
+    if (!controlCenterOpen) {
+      return
+    }
+
+    setNotificationHistory((current) => current.map((item) => (item.read ? item : { ...item, read: true })))
+  }, [controlCenterOpen])
+
+  useEffect(() => {
+    function syncNetworkStatus() {
+      setNetworkOnline(navigator.onLine)
+    }
+
+    window.addEventListener('online', syncNetworkStatus)
+    window.addEventListener('offline', syncNetworkStatus)
+    return () => {
+      window.removeEventListener('online', syncNetworkStatus)
+      window.removeEventListener('offline', syncNetworkStatus)
+    }
+  }, [])
+
+  useEffect(() => {
+    function handleGlobalKeydown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      const targetTag = target?.tagName ?? ''
+      const isEditable =
+        !!target &&
+        (target.isContentEditable || targetTag === 'INPUT' || targetTag === 'TEXTAREA' || targetTag === 'SELECT')
+      const primaryModifier = event.ctrlKey || event.metaKey
+      const activeWindowId = activeWindow?.id
+
+      if (systemDialog) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          closeSystemDialog()
+        } else if (event.key === 'Enter' && !isEditable) {
+          event.preventDefault()
+          confirmSystemDialog()
+        }
+        return
+      }
+
+      if (missionControlState.open) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          closeMissionControl()
+          return
+        }
+
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          activateMissionControlSelection(missionControlState.selectedIndex)
+          return
+        }
+
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          setMissionControlState((current) => ({
+            ...current,
+            selectedIndex: (current.selectedIndex - 1 + missionControlCandidates.length) % missionControlCandidates.length,
+          }))
+          return
+        }
+
+        if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'Tab') {
+          event.preventDefault()
+          const step = event.shiftKey ? -1 : 1
+          setMissionControlState((current) => ({
+            ...current,
+            selectedIndex: (current.selectedIndex + step + missionControlCandidates.length) % missionControlCandidates.length,
+          }))
+          return
+        }
+      }
+
+      if (event.altKey && event.key === 'Tab' && altTabCandidates.length > 0) {
+        event.preventDefault()
+        setLauncherOpen(false)
+        setContextMenu(null)
+        setControlCenterOpen(false)
+        setOpenAppMenu(null)
+        setPowerMenuOpen(false)
+        setSpotlightOpen(false)
+        setAltTabState((current) => {
+          const step = event.shiftKey ? -1 : 1
+          if (!current.open) {
+            const initialIndex = altTabCandidates.length > 1 ? 1 : 0
+            return { open: true, selectedIndex: initialIndex }
+          }
+          const nextIndex = (current.selectedIndex + step + altTabCandidates.length) % altTabCandidates.length
+          return { open: true, selectedIndex: nextIndex }
+        })
+        return
+      }
+
+      if (!isEditable && !event.altKey && (event.key === 'F3' || (primaryModifier && event.key === 'ArrowUp'))) {
+        event.preventDefault()
+        openMissionControl()
+        return
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.code === 'Space') {
+        event.preventDefault()
+        setLauncherOpen(false)
+        setContextMenu(null)
+        setControlCenterOpen(false)
+        setOpenAppMenu(null)
+        setPowerMenuOpen(false)
+        setSpotlightOpen((current) => !current)
+        return
+      }
+
+      if (event.key === 'Escape') {
+        if (missionControlState.open) {
+          event.preventDefault()
+          closeMissionControl()
+          return
+        }
+        if (quickLookTarget) {
+          event.preventDefault()
+          closeQuickLook()
+          return
+        }
+        if (spotlightOpen) {
+          event.preventDefault()
+          setSpotlightOpen(false)
+          return
+        }
+        if (contextMenu || launcherOpen || controlCenterOpen || openAppMenu || powerMenuOpen) {
+          event.preventDefault()
+          setContextMenu(null)
+          setLauncherOpen(false)
+          setControlCenterOpen(false)
+          setOpenAppMenu(null)
+          setPowerMenuOpen(false)
+          setStatusMenuOpen(null)
+          return
+        }
+      }
+
+      if (!spotlightOpen) {
+        if (!isEditable && !event.ctrlKey && !event.metaKey && !event.altKey && event.code === 'Space' && quickLookCandidate) {
+          event.preventDefault()
+          openQuickLook()
+          return
+        }
+
+        if (!isEditable && !event.ctrlKey && !event.metaKey && !event.altKey && event.key === '/') {
+          event.preventDefault()
+          setSpotlightOpen(true)
+        }
+
+        if (!activeWindowId) {
+          return
+        }
+
+        if (primaryModifier && !event.shiftKey && event.key.toLowerCase() === 'w') {
+          event.preventDefault()
+          closeWindow(activeWindowId)
+          return
+        }
+
+        if (primaryModifier && !event.shiftKey && event.key.toLowerCase() === 'm') {
+          event.preventDefault()
+          minimizeWindow(activeWindowId)
+          pushToast('Ventana minimizada', activeWindow?.title)
+          return
+        }
+
+        if (primaryModifier && !event.shiftKey && event.key.toLowerCase() === 'n') {
+          event.preventDefault()
+          if (activeWindow?.appId === 'finder') {
+            openFinderWindow(activeWindow.finderState ? getActiveFinderRoute(activeWindow.finderState) : 'computer')
+            pushToast('Nueva ventana de Finder')
+            return
+          }
+          if (activeWindow?.appId === 'notes') {
+            createNote()
+            openApp('notes')
+            return
+          }
+          if (activeWindow?.appId === 'terminal') {
+            const nextWindow = createWindow('terminal')
+            const dockRect = getDockRect('terminal')
+            nextWindow.genie = dockRect ? { mode: 'opening', dockRect } : null
+            setWindows((current) => [...current, nextWindow])
+            pushToast('Nueva ventana de Terminal')
+            return
+          }
+          if (activeWindow?.appId === 'safari') {
+            openSafariWindow()
+            pushToast('Nueva ventana de Safari')
+            return
+          }
+        }
+
+        if (activeWindow?.appId === 'safari' && primaryModifier && !event.shiftKey && event.key.toLowerCase() === 'r') {
+          event.preventDefault()
+          reloadBrowser(activeWindowId)
+          pushToast('Safari', 'Recargando pagina actual.')
+          return
+        }
+
+        if (event.altKey && !primaryModifier && !event.shiftKey && event.key === 'ArrowLeft') {
+          if (activeWindow?.appId === 'safari') {
+            event.preventDefault()
+            moveBrowserHistory(activeWindowId, -1)
+            return
+          }
+          if (activeWindow?.appId === 'finder' && activeWindow.finderState) {
+            event.preventDefault()
+            moveFinderHistory(activeWindowId, -1)
+            return
+          }
+        }
+
+        if (event.altKey && !primaryModifier && !event.shiftKey && event.key === 'ArrowRight') {
+          if (activeWindow?.appId === 'safari') {
+            event.preventDefault()
+            moveBrowserHistory(activeWindowId, 1)
+            return
+          }
+          if (activeWindow?.appId === 'finder' && activeWindow.finderState) {
+            event.preventDefault()
+            moveFinderHistory(activeWindowId, 1)
+            return
+          }
+        }
+        return
+      }
+
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSpotlightOpen(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeydown)
+    return () => window.removeEventListener('keydown', handleGlobalKeydown)
+  }, [activeWindow, altTabCandidates, contextMenu, controlCenterOpen, launcherOpen, missionControlCandidates, missionControlState, openAppMenu, powerMenuOpen, quickLookCandidate, quickLookTarget, spotlightOpen, statusMenuOpen, systemDialog, windows])
+
+  useEffect(() => {
+    function handleAltTabKeyup(event: KeyboardEvent) {
+      if (event.key !== 'Alt' || !altTabState.open) {
+        return
+      }
+
+      event.preventDefault()
+      activateAltTabSelection(altTabState.selectedIndex)
+      setAltTabState({ open: false, selectedIndex: 0 })
+    }
+
+    window.addEventListener('keyup', handleAltTabKeyup)
+    return () => window.removeEventListener('keyup', handleAltTabKeyup)
+  }, [altTabState, altTabCandidates])
+
+  useEffect(() => {
+    if (!altTabState.open) {
+      return
+    }
+
+    if (altTabCandidates.length === 0) {
+      setAltTabState({ open: false, selectedIndex: 0 })
+      return
+    }
+
+    if (altTabState.selectedIndex >= altTabCandidates.length) {
+      setAltTabState((current) => ({
+        ...current,
+        selectedIndex: Math.max(0, altTabCandidates.length - 1),
+      }))
+    }
+  }, [altTabCandidates, altTabState])
+
+  useEffect(() => {
+    if (!missionControlState.open) {
+      return
+    }
+
+    if (missionControlCandidates.length === 0) {
+      closeMissionControl()
+      return
+    }
+
+    if (missionControlState.selectedIndex >= missionControlCandidates.length) {
+      setMissionControlState((current) => ({
+        ...current,
+        selectedIndex: Math.max(0, missionControlCandidates.length - 1),
+      }))
+    }
+  }, [missionControlCandidates, missionControlState])
+
+  function dismissToast(id: string) {
+    const timer = toastTimersRef.current[id]
+    if (timer !== undefined) {
+      window.clearTimeout(timer)
+      delete toastTimersRef.current[id]
+    }
+    setToasts((current) => current.filter((toast) => toast.id !== id))
+  }
+
+  function closeSystemDialog() {
+    dialogConfirmActionRef.current = null
+    setSystemDialog(null)
+  }
+
+  function openSystemDialog(dialog: SystemDialogState, onConfirm?: () => void) {
+    dialogConfirmActionRef.current = onConfirm ?? null
+    setSystemDialog(dialog)
+  }
+
+  function confirmSystemDialog() {
+    const action = dialogConfirmActionRef.current
+    closeSystemDialog()
+    action?.()
+  }
+
+  function pushToast(title: string, detail?: string) {
+    const id = `toast-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const nextToast = { id, title, detail, createdAt: Date.now(), read: false }
+    setToasts((current) => [...current.slice(-2), nextToast])
+    setNotificationHistory((current) => [nextToast, ...current].slice(0, 30))
+    toastTimersRef.current[id] = window.setTimeout(() => dismissToast(id), 3200)
+  }
+
+  function clearNotificationHistory() {
+    setNotificationHistory([])
+  }
+
+  function rememberRecent(item: Omit<RecentItem, 'id' | 'createdAt'>) {
+    setRecentItems((current) => {
+      const nextItem: RecentItem = {
+        ...item,
+        id: `recent-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+      }
+      const withoutDuplicate = current.filter((entry) => entry.key !== item.key)
+      return [nextItem, ...withoutDuplicate].slice(0, 14)
+    })
+  }
+
+  function activateRecentItem(item: RecentItem) {
+    switch (item.kind) {
+      case 'app':
+        if (item.appId) {
+          openApp(item.appId)
+        }
+        return
+      case 'installed-app': {
+        const app = installedApps.find((entry) => entry.id === item.installedAppId)
+        if (app) {
+          void launchInstalledSystemApp(app)
+        }
+        return
+      }
+      case 'note':
+        if (item.noteId) {
+          setSelectedNoteId(item.noteId)
+          openApp('notes')
+        }
+        return
+      case 'document':
+        if (item.itemId) {
+          openDesktopDocument(item.itemId)
+        }
+        return
+      case 'volume':
+        if (item.mount) {
+          openDesktopVolume(item.mount)
+        }
+        return
+      case 'route':
+        if (item.route) {
+          openOrFocusFinderRoute(item.route)
+        }
+        return
+      case 'path':
+        if (item.path) {
+          void openTrackedSystemPath(item.path, item.title, item.icon?.kind === 'image' ? item.icon.value : null)
+        }
+        return
+    }
+  }
+
+  function activateAltTabSelection(index: number) {
+    const target = altTabCandidates[index]
+    if (!target) {
+      return
+    }
+    focusWindow(target.id)
+    pushToast('Ventana activa', target.title)
+  }
+
+  function activateMissionControlSelection(index: number) {
+    const target = missionControlCandidates[index]
+    if (!target) {
+      return
+    }
+
+    focusWindow(target.id)
+    closeMissionControl()
+    pushToast('Mission Control', getWindowDisplayTitle(target))
+  }
 
   function logoutToLogin() {
     setPowerMenuOpen(false)
     setOpenAppMenu(null)
     setControlCenterOpen(false)
     setLauncherOpen(false)
+    setSpotlightOpen(false)
     setContextMenu(null)
     setLoginTransitioning(false)
     setLoggedIn(false)
@@ -2275,6 +2978,7 @@ function App() {
       }
       Object.values(resetTimers).forEach((timer) => window.clearTimeout(timer))
       Object.values(showTimers).forEach((timer) => window.clearTimeout(timer))
+      Object.values(toastTimersRef.current).forEach((timer) => window.clearTimeout(timer))
     }
   }, [])
 
@@ -2407,10 +3111,8 @@ function App() {
 
   useEffect(() => {
     windowsRef.current = windows
-    volumeEntriesByMountRef.current = volumeEntriesByMount
-    loadingVolumeMountsRef.current = loadingVolumeMounts
     activeSafariWindowIdRef.current = activeSafariWindow?.id ?? null
-  }, [activeSafariWindow?.id, loadingVolumeMounts, volumeEntriesByMount, windows])
+  }, [activeSafariWindow?.id, windows])
 
   useEffect(() => {
     lastBrowserSyncSignatureRef.current = ''
@@ -2447,47 +3149,63 @@ function App() {
           }
 
           const currentState = item.browserState
+          const activeTab = getActiveBrowserTab(currentState)
+          if (!activeTab) {
+            return item
+          }
+          const nextTab = { ...activeTab }
+          let tabChanged = false
           const nextState = { ...currentState }
 
-          if (payload.url && payload.url !== currentState.history[currentState.historyIndex]) {
-            const nextHistory = [...currentState.history.slice(0, currentState.historyIndex + 1), payload.url]
-            nextState.history = nextHistory
-            nextState.historyIndex = nextHistory.length - 1
-            nextState.inputValue = payload.url
+          if (payload.url && payload.url !== activeTab.history[activeTab.historyIndex]) {
+            const nextHistory = [...activeTab.history.slice(0, activeTab.historyIndex + 1), payload.url]
+            nextTab.history = nextHistory
+            nextTab.historyIndex = nextHistory.length - 1
+            nextTab.inputValue = payload.url
+            tabChanged = true
             changed = true
           }
 
           if (payload.loading) {
-            if (!currentState.loading) {
-              nextState.loading = true
+            if (!activeTab.loading) {
+              nextTab.loading = true
+              tabChanged = true
               changed = true
             }
           } else {
-            const wasLoading = currentState.loading
+            const wasLoading = activeTab.loading
             if (wasLoading) {
-              nextState.loading = false
+              nextTab.loading = false
+              tabChanged = true
               changed = true
             }
-            if (wasLoading || currentState.progress > 0) {
-              nextState.progress = 100
+            if (wasLoading || activeTab.progress > 0) {
+              nextTab.progress = 100
+              tabChanged = true
               completedWindowIds.push(item.id)
               changed = true
             }
           }
 
-          const nextTitle = payload.title ?? currentState.title
-          if (nextTitle !== currentState.title) {
-            nextState.title = nextTitle
+          const nextTitle = payload.title ?? activeTab.title
+          if (nextTitle !== activeTab.title) {
+            nextTab.title = nextTitle
+            tabChanged = true
             changed = true
           }
 
           const nextError = payload.lastError ?? null
-          if (nextError !== currentState.lastError) {
-            nextState.lastError = nextError
+          if (nextError !== activeTab.lastError) {
+            nextTab.lastError = nextError
+            tabChanged = true
             changed = true
           }
 
-          return changed ? { ...item, browserState: nextState } : item
+          if (tabChanged) {
+            nextState.tabs = currentState.tabs.map((tab) => tab.id === nextTab.id ? nextTab : tab)
+          }
+
+          return changed ? { ...item, browserState: syncBrowserState(nextState) } : item
         })
 
         return changed ? next : current
@@ -2518,37 +3236,41 @@ function App() {
     })
 
     requestedTargets.forEach((targetPath) => {
-      if (volumeEntriesByMountRef.current[targetPath] || loadingVolumeMountsRef.current[targetPath]) {
+      if (volumeEntriesByMount[targetPath] || loadingVolumeMounts[targetPath]) {
         return
       }
 
-      loadingVolumeMountsRef.current = { ...loadingVolumeMountsRef.current, [targetPath]: true }
-      setLoadingVolumeMounts((current) => ({ ...current, [targetPath]: true }))
-
-      const loader = window.electronDesktop
-        ? window.electronDesktop.listVolumeEntries(targetPath) as Promise<VolumeEntry[]>
-        : fetch(`/api/volumes/entries?target=${encodeURIComponent(targetPath)}`).then((response) => {
-            if (!response.ok) {
-              throw new Error('No fue posible leer la unidad')
-            }
-            return response.json() as Promise<VolumeEntry[]>
-          })
-
-      void loader
-        .then((entries) => {
-          volumeEntriesByMountRef.current = { ...volumeEntriesByMountRef.current, [targetPath]: entries }
-          setVolumeEntriesByMount((current) => ({ ...current, [targetPath]: entries }))
-        })
-        .catch(() => {
-          volumeEntriesByMountRef.current = { ...volumeEntriesByMountRef.current, [targetPath]: [] }
-          setVolumeEntriesByMount((current) => ({ ...current, [targetPath]: [] }))
-        })
-        .finally(() => {
-          loadingVolumeMountsRef.current = { ...loadingVolumeMountsRef.current, [targetPath]: false }
-          setLoadingVolumeMounts((current) => ({ ...current, [targetPath]: false }))
-        })
+      void loadVolumeEntriesPage(targetPath, { reset: true })
     })
-  }, [desktopItems, windows])
+  }, [desktopItems, loadVolumeEntriesPage, loadingVolumeMounts, volumeEntriesByMount, windows])
+
+  useEffect(() => {
+    if (!initialLowEndDevice || !window.electronDesktop) {
+      return
+    }
+
+    progressiveEntryPaths.forEach((targetPath) => {
+      const loadedCount = volumeEntriesByMount[targetPath]?.length ?? 0
+      const visibleCount = visibleEntryCountsByPath[targetPath] ?? 0
+      const meta = volumeEntryMetaByPath[targetPath]
+
+      if (!meta?.hasMore || loadingVolumeMounts[targetPath]) {
+        return
+      }
+
+      if (visibleCount >= Math.max(0, loadedCount - 8)) {
+        void loadVolumeEntriesPage(targetPath)
+      }
+    })
+  }, [
+    initialLowEndDevice,
+    loadVolumeEntriesPage,
+    loadingVolumeMounts,
+    progressiveEntryPaths,
+    visibleEntryCountsByPath,
+    volumeEntriesByMount,
+    volumeEntryMetaByPath,
+  ])
 
   useEffect(() => {
     windows.forEach((item) => {
@@ -2610,28 +3332,56 @@ function App() {
               const wideTip = Math.max(14, scaleX * 100 * 0.9)
 
               const frames: Keyframe[] =
-                item.genie.mode === 'opening'
-                  ? [
-                      { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 50, 2.5, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 0 },
-                      { transform: `translate(${deltaX * 0.92}px, ${deltaY * 0.95}px) scale(${Math.min(0.13, scaleX + 0.01)}, ${Math.min(0.28, scaleY + 0.03)})`, clipPath: createLampClipPath(anchorX, 43, 5.5, Math.max(3, narrowTip * 1.08), bias * 0.92), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.08 },
-                      { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.min(0.18, scaleX + 0.015)}, ${Math.min(0.42, scaleY + 0.08)})`, clipPath: createLampClipPath(anchorX, 36, 8.5, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.22 },
-                      { transform: `translate(${deltaX * 0.56}px, ${deltaY * 0.68}px) scale(${Math.min(0.4, scaleX + 0.11)}, ${Math.min(0.64, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 24, 11, Math.max(10, wideTip * 0.84), bias * 0.56), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.92', offset: 0.42 },
-                      { transform: `translate(${deltaX * 0.32}px, ${deltaY * 0.42}px) scale(${Math.min(0.74, scaleX + 0.28)}, ${Math.min(0.88, scaleY + 0.18)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.32), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.68 },
-                      { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.88 },
-                      { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 1 },
-                    ]
-                  : [
-                      { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0 },
-                      { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.08 },
-                      { transform: `translate(${deltaX * 0.32}px, ${deltaY * 0.42}px) scale(${Math.max(0.56, 1 - (1 - scaleX) * 0.18)}, ${Math.max(0.74, 1 - (1 - scaleY) * 0.08)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.32), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.24 },
-                      { transform: `translate(${deltaX * 0.56}px, ${deltaY * 0.68}px) scale(${Math.max(0.32, scaleX + 0.12)}, ${Math.max(0.54, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 24, 11, Math.max(10, wideTip * 0.84), bias * 0.56), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.92', offset: 0.46 },
-                      { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.max(0.16, scaleX + 0.02)}, ${Math.max(0.28, scaleY + 0.08)})`, clipPath: createLampClipPath(anchorX, 36, 8.5, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.7 },
-                      { transform: `translate(${deltaX * 0.92}px, ${deltaY * 0.95}px) scale(${Math.max(0.095, scaleX + 0.01)}, ${Math.max(0.16, scaleY + 0.03)})`, clipPath: createLampClipPath(anchorX, 43, 5.5, Math.max(3, narrowTip * 1.08), bias * 0.92), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.88 },
-                      { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 50, 2.5, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 1 },
-                    ]
+                resolvedPerformanceProfile === 'compatibility'
+                  ? item.genie.mode === 'opening'
+                    ? [
+                        { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, opacity: '0.78', offset: 0 },
+                        { transform: `translate(${deltaX * 0.42}px, ${deltaY * 0.5}px) scale(${Math.max(0.74, scaleX + 0.18)}, ${Math.max(0.82, scaleY + 0.12)})`, opacity: '0.94', offset: 0.6 },
+                        { transform: 'translate(0px, 0px) scale(1, 1)', opacity: '1', offset: 1 },
+                      ]
+                    : [
+                        { transform: 'translate(0px, 0px) scale(1, 1)', opacity: '1', offset: 0 },
+                        { transform: `translate(${deltaX * 0.42}px, ${deltaY * 0.5}px) scale(${Math.max(0.74, scaleX + 0.18)}, ${Math.max(0.82, scaleY + 0.12)})`, opacity: '0.94', offset: 0.4 },
+                        { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, opacity: '0.78', offset: 1 },
+                      ]
+                  : resolvedPerformanceProfile === 'balanced'
+                    ? item.genie.mode === 'opening'
+                      ? [
+                          { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 46, 4, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 0 },
+                          { transform: `translate(${deltaX * 0.7}px, ${deltaY * 0.76}px) scale(${Math.min(0.22, scaleX + 0.04)}, ${Math.min(0.46, scaleY + 0.1)})`, clipPath: createLampClipPath(anchorX, 34, 8, mediumTip, bias * 0.7), borderRadius: `${WINDOW_RADIUS + 7}px`, opacity: '0.89', offset: 0.2 },
+                          { transform: `translate(${deltaX * 0.44}px, ${deltaY * 0.52}px) scale(${Math.min(0.58, scaleX + 0.18)}, ${Math.min(0.76, scaleY + 0.15)})`, clipPath: createLampClipPath(anchorX, 18, 11, wideTip, bias * 0.44), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.96', offset: 0.56 },
+                          { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.01, 0.995)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.84 },
+                          { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 1 },
+                        ]
+                      : [
+                          { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0 },
+                          { transform: `translate(${deltaX * 0.12}px, ${deltaY * 0.16}px) scale(1.01, 0.995)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.12 },
+                          { transform: `translate(${deltaX * 0.44}px, ${deltaY * 0.52}px) scale(${Math.max(0.42, scaleX + 0.16)}, ${Math.max(0.62, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 18, 11, wideTip, bias * 0.44), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.95', offset: 0.5 },
+                          { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.84}px) scale(${Math.max(0.16, scaleX + 0.03)}, ${Math.max(0.28, scaleY + 0.07)})`, clipPath: createLampClipPath(anchorX, 36, 8, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 7}px`, opacity: '0.88', offset: 0.82 },
+                          { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 46, 4, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 1 },
+                        ]
+                    : item.genie.mode === 'opening'
+                      ? [
+                          { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 50, 2.5, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 0 },
+                          { transform: `translate(${deltaX * 0.92}px, ${deltaY * 0.95}px) scale(${Math.min(0.13, scaleX + 0.01)}, ${Math.min(0.28, scaleY + 0.03)})`, clipPath: createLampClipPath(anchorX, 43, 5.5, Math.max(3, narrowTip * 1.08), bias * 0.92), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.08 },
+                          { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.min(0.18, scaleX + 0.015)}, ${Math.min(0.42, scaleY + 0.08)})`, clipPath: createLampClipPath(anchorX, 36, 8.5, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.22 },
+                          { transform: `translate(${deltaX * 0.56}px, ${deltaY * 0.68}px) scale(${Math.min(0.4, scaleX + 0.11)}, ${Math.min(0.64, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 24, 11, Math.max(10, wideTip * 0.84), bias * 0.56), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.92', offset: 0.42 },
+                          { transform: `translate(${deltaX * 0.32}px, ${deltaY * 0.42}px) scale(${Math.min(0.74, scaleX + 0.28)}, ${Math.min(0.88, scaleY + 0.18)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.32), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.68 },
+                          { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.88 },
+                          { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 1 },
+                        ]
+                      : [
+                          { transform: 'translate(0px, 0px) scale(1, 1)', clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0 },
+                          { transform: `translate(${deltaX * 0.1}px, ${deltaY * 0.14}px) scale(1.02, 0.99)`, clipPath: `inset(0 round ${WINDOW_RADIUS}px)`, borderRadius: `${WINDOW_RADIUS}px`, opacity: '1', offset: 0.08 },
+                          { transform: `translate(${deltaX * 0.32}px, ${deltaY * 0.42}px) scale(${Math.max(0.56, 1 - (1 - scaleX) * 0.18)}, ${Math.max(0.74, 1 - (1 - scaleY) * 0.08)})`, clipPath: createLampClipPath(anchorX, 14, 12, wideTip, bias * 0.32), borderRadius: `${WINDOW_RADIUS + 4}px`, opacity: '0.97', offset: 0.24 },
+                          { transform: `translate(${deltaX * 0.56}px, ${deltaY * 0.68}px) scale(${Math.max(0.32, scaleX + 0.12)}, ${Math.max(0.54, scaleY + 0.14)})`, clipPath: createLampClipPath(anchorX, 24, 11, Math.max(10, wideTip * 0.84), bias * 0.56), borderRadius: `${WINDOW_RADIUS + 6}px`, opacity: '0.92', offset: 0.46 },
+                          { transform: `translate(${deltaX * 0.78}px, ${deltaY * 0.86}px) scale(${Math.max(0.16, scaleX + 0.02)}, ${Math.max(0.28, scaleY + 0.08)})`, clipPath: createLampClipPath(anchorX, 36, 8.5, mediumTip, bias * 0.78), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.88', offset: 0.7 },
+                          { transform: `translate(${deltaX * 0.92}px, ${deltaY * 0.95}px) scale(${Math.max(0.095, scaleX + 0.01)}, ${Math.max(0.16, scaleY + 0.03)})`, clipPath: createLampClipPath(anchorX, 43, 5.5, Math.max(3, narrowTip * 1.08), bias * 0.92), borderRadius: `${WINDOW_RADIUS + 9}px`, opacity: '0.85', offset: 0.88 },
+                          { transform: `translate(${deltaX}px, ${deltaY}px) scale(${scaleX}, ${scaleY})`, clipPath: createLampClipPath(anchorX, 50, 2.5, narrowTip, bias), borderRadius: `${WINDOW_RADIUS + 8}px`, opacity: '0.84', offset: 1 },
+                        ]
 
               return frameNode.animate(frames, {
-                duration: 940,
+                duration: resolvedPerformanceProfile === 'compatibility' ? 240 : resolvedPerformanceProfile === 'balanced' ? 520 : 940,
                 easing: 'cubic-bezier(0.22, 0.78, 0.2, 1)',
                 fill: 'both',
               })
@@ -2662,14 +3412,124 @@ function App() {
         runningGenies.current.delete(item.id)
       }
     })
-  }, [windows])
+  }, [resolvedPerformanceProfile, windows])
 
   const activeApp = activeWindow ? getResolvedApp(activeWindow.appId) : getResolvedApp('finder')
   const topZIndex = useMemo(() => windows.reduce((max, item) => Math.max(max, item.zIndex), 0), [windows])
 
+  useEffect(() => {
+    if (!initialLowEndDevice) {
+      return
+    }
+
+    Object.entries(videoElementRefs.current).forEach(([windowId, video]) => {
+      if (!video || activeWindow?.id === windowId) {
+        return
+      }
+
+      if (!video.paused) {
+        video.pause()
+      }
+      updateVideoPlaybackMeta(windowId)
+    })
+  }, [activeWindow?.id, initialLowEndDevice])
+
   function getAppMenuActions(windowItem: WindowState | undefined, menuLabel: string): Array<{ id: AppMenuAction; label: string }> {
     if (!windowItem) {
-      return []
+      switch (menuLabel) {
+        case 'Archivo':
+          return [{ id: 'finder-new-window', label: 'Nueva ventana de Finder' }]
+        case 'Edicion':
+          return desktopClipboard ? [{ id: 'finder-paste', label: 'Pegar' }] : []
+        case 'Ver':
+          return [{ id: 'finder-refresh', label: 'Actualizar escritorio' }]
+        case 'Ir':
+          return [
+            { id: 'finder-go-desktop', label: 'Escritorio' },
+            { id: 'finder-go-computer', label: 'Equipo' },
+            { id: 'finder-go-trash', label: 'Papelera' },
+            { id: 'finder-go-device', label: 'Dispositivo' },
+            { id: 'finder-go-applications', label: 'Aplicaciones' },
+            { id: 'finder-go-dock', label: 'Dock' },
+            { id: 'finder-go-display', label: 'Pantalla' },
+          ]
+        case 'Ventana':
+          return [{ id: 'finder-new-window', label: 'Nueva ventana' }]
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
+        default:
+          return []
+      }
+    }
+
+    const defaultWindowActions = [
+      { id: 'window-minimize' as const, label: 'Minimizar ventana' },
+      { id: 'window-close' as const, label: 'Cerrar ventana' },
+    ]
+
+    if (windowItem.appId === 'notes') {
+      switch (menuLabel) {
+        case 'Archivo':
+          return [{ id: 'note-new', label: 'Nueva nota' }, { id: 'window-close', label: 'Cerrar ventana' }]
+        case 'Ventana':
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
+        default:
+          return []
+      }
+    }
+
+    if (windowItem.appId === 'textedit') {
+      switch (menuLabel) {
+        case 'Ventana':
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
+        default:
+          return []
+      }
+    }
+
+    if (windowItem.appId === 'safari' && windowItem.browserState) {
+      const canGoBack = windowItem.browserState.historyIndex > 0
+      const canGoForward = windowItem.browserState.historyIndex < windowItem.browserState.history.length - 1
+      const currentUrl = windowItem.browserState.history[windowItem.browserState.historyIndex] ?? getInitialBrowserUrl(isElectronDesktop)
+      switch (menuLabel) {
+        case 'Archivo':
+          return [
+            { id: 'safari-new-window', label: 'Nueva ventana' },
+            { id: 'browser-open-external', label: 'Abrir pagina en navegador externo' },
+          ]
+        case 'Visualizacion':
+          return [
+            { id: 'browser-reload', label: 'Recargar pagina' },
+            { id: 'browser-home', label: isSafariHomeUrl(currentUrl) ? 'Inicio de Safari' : 'Ir a inicio' },
+          ]
+        case 'Historial':
+          return [
+            ...(canGoBack ? [{ id: 'browser-go-back' as const, label: 'Atras' }] : []),
+            ...(canGoForward ? [{ id: 'browser-go-forward' as const, label: 'Adelante' }] : []),
+          ]
+        case 'Marcadores':
+          return [{ id: 'browser-home', label: 'Pagina de inicio' }]
+        default:
+          return []
+      }
+    }
+
+    if (windowItem.appId === 'calculator') {
+      switch (menuLabel) {
+        case 'Archivo':
+        case 'Ver':
+          return [{ id: 'calculator-clear', label: 'Limpiar calculadora' }]
+        case 'Ventana':
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
+        default:
+          return []
+      }
     }
 
     if (windowItem.appId === 'finder' && windowItem.finderState) {
@@ -2745,10 +3605,9 @@ function App() {
             { id: 'media-open-system', label: 'Abrir con app externa' },
           ]
         case 'Ventana':
-          return [
-            { id: 'window-minimize', label: 'Minimizar ventana' },
-            { id: 'window-close', label: 'Cerrar ventana' },
-          ]
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
         default:
           return []
       }
@@ -2774,10 +3633,33 @@ function App() {
             { id: 'media-open-system', label: 'Abrir con app externa' },
           ]
         case 'Ventana':
-          return [
-            { id: 'window-minimize', label: 'Minimizar ventana' },
-            { id: 'window-close', label: 'Cerrar ventana' },
-          ]
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
+        default:
+          return []
+      }
+    }
+
+    if (windowItem.appId === 'terminal') {
+      switch (menuLabel) {
+        case 'Shell':
+          return [{ id: 'terminal-new-window', label: 'Nueva ventana de Terminal' }]
+        case 'Ventana':
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
+        default:
+          return []
+      }
+    }
+
+    if (windowItem.appId === 'launcher' || windowItem.appId === 'docksettings' || windowItem.appId === 'display' || windowItem.appId === 'about') {
+      switch (menuLabel) {
+        case 'Ventana':
+          return defaultWindowActions
+        case 'Ayuda':
+          return [{ id: 'about-open', label: 'Acerca de Mactorno' }]
         default:
           return []
       }
@@ -2787,16 +3669,87 @@ function App() {
   }
 
   async function runAppMenuAction(action: AppMenuAction) {
-    if (!activeWindow) {
-      return
-    }
-
     setOpenAppMenu(null)
+
+    if (!activeWindow) {
+      switch (action) {
+        case 'finder-new-window':
+          openFinderWindow('desktop')
+          return
+        case 'finder-paste':
+          pasteDesktopClipboard()
+          return
+        case 'finder-refresh':
+          return
+        case 'finder-go-desktop':
+          openOrFocusFinderRoute('desktop')
+          return
+        case 'finder-go-computer':
+          openOrFocusFinderRoute('computer')
+          return
+        case 'finder-go-trash':
+          openOrFocusFinderRoute('trash')
+          return
+        case 'finder-go-device':
+          openOrFocusFinderRoute('device')
+          return
+        case 'finder-go-applications':
+          openOrFocusFinderRoute('applications')
+          return
+        case 'finder-go-dock':
+          openOrFocusFinderRoute('dock')
+          return
+        case 'finder-go-display':
+          openOrFocusFinderRoute('display')
+          return
+        case 'about-open':
+          openApp('about')
+          return
+        default:
+          return
+      }
+    }
 
     const activeFinderRoute = activeWindow.finderState ? getActiveFinderRoute(activeWindow.finderState) : null
     const activeDesktopFolderId = activeFinderRoute ? getDesktopFolderIdFromRoute(activeFinderRoute) : null
 
     switch (action) {
+      case 'note-new':
+        createNote()
+        if (activeWindow.appId !== 'notes') {
+          openApp('notes')
+        }
+        return
+      case 'calculator-clear':
+        clearCalculator(activeWindow.id)
+        return
+      case 'safari-new-window':
+        openSafariWindow()
+        return
+      case 'browser-go-back':
+        moveBrowserHistory(activeWindow.id, -1)
+        return
+      case 'browser-go-forward':
+        moveBrowserHistory(activeWindow.id, 1)
+        return
+      case 'browser-reload':
+        reloadBrowser(activeWindow.id)
+        return
+      case 'browser-open-external':
+        if (activeWindow.browserState) {
+          openBrowserExternally(activeWindow.browserState.history[activeWindow.browserState.historyIndex] ?? '')
+        }
+        return
+      case 'browser-home':
+        commitBrowserNavigation(activeWindow.id, getInitialBrowserUrl(isElectronDesktop))
+        return
+      case 'terminal-new-window': {
+        const nextWindow = createWindow('terminal')
+        const dockRect = getDockRect('terminal')
+        nextWindow.genie = dockRect ? { mode: 'opening', dockRect } : null
+        setWindows((current) => [...current, nextWindow])
+        return
+      }
       case 'finder-new-folder':
         createDesktopItem('folder', undefined, activeDesktopFolderId ?? null)
         return
@@ -2886,7 +3839,7 @@ function App() {
         return
       case 'media-open-system':
         if (activeWindow.mediaPath) {
-          await openSystemPath(activeWindow.mediaPath)
+          await openTrackedSystemPath(activeWindow.mediaPath, activeWindow.title)
         }
         return
       case 'window-minimize':
@@ -2960,7 +3913,34 @@ function App() {
     }
   }
 
+  function serializeWindowForSession(windowItem: WindowState): WindowSessionEntry | null {
+    if (windowItem.genie?.removeOnFinish) {
+      return null
+    }
+
+    return {
+      id: windowItem.id,
+      appId: windowItem.appId,
+      title: windowItem.title,
+      x: windowItem.x,
+      y: windowItem.y,
+      width: windowItem.width,
+      height: windowItem.height,
+      zIndex: windowItem.zIndex,
+      minimized: windowItem.minimized,
+      maximized: windowItem.maximized,
+      restoreBounds: windowItem.restoreBounds,
+      finderState: windowItem.finderState,
+      browserState: windowItem.browserState,
+      calculatorState: windowItem.calculatorState,
+      terminalState: windowItem.terminalState,
+      mediaPath: windowItem.mediaPath,
+      textDocumentId: windowItem.textDocumentId,
+    }
+  }
+
   function openApp(appId: AppId) {
+    setSpotlightOpen(false)
     if (appId === 'launcher') {
       setLauncherOpen((current) => !current)
       return
@@ -2980,6 +3960,14 @@ function App() {
     }
 
     setLauncherOpen(false)
+    rememberRecent({
+      key: `app:${appId}`,
+      kind: 'app',
+      title: getResolvedApp(appId).name,
+      subtitle: 'App integrada',
+      appId,
+      icon: getResolvedApp(appId).iconSpec,
+    })
 
     if (appId === 'finder') {
       const existingFinder = windows.find((item) => item.appId === 'finder' && !item.minimized)
@@ -3019,6 +4007,7 @@ function App() {
 
   function openFinderWindow(route: FinderRoute) {
     setLauncherOpen(false)
+    setSpotlightOpen(false)
     const nextWindow = createWindow('finder', route)
     const dockRect = getDockRect('finder')
     nextWindow.genie = dockRect ? { mode: 'opening', dockRect } : null
@@ -3076,6 +4065,7 @@ function App() {
     setEditingDesktopItemId(nextItem.id)
     setEditingDesktopItemName(nextItem.name)
     setContextMenu(null)
+    pushToast(kind === 'folder' ? 'Nueva carpeta' : kind === 'text' ? 'Nuevo documento' : 'Nuevo archivo', nextItem.name)
 
     if (kind === 'text') {
       window.setTimeout(() => {
@@ -3105,6 +4095,22 @@ function App() {
     }
 
     const nextName = editingDesktopItemName.trim() || target.name
+    const conflictingItem = desktopItems.find((item) =>
+      item.id !== itemId &&
+      item.parentId === target.parentId &&
+      item.trashedAt === null &&
+      item.name.trim().toLowerCase() === nextName.trim().toLowerCase())
+
+    if (conflictingItem) {
+      openSystemDialog({
+        title: 'Nombre en uso',
+        message: `Ya existe un elemento llamado "${nextName}" en esta ubicacion.`,
+        confirmLabel: 'Entendido',
+      })
+      setEditingDesktopItemId(null)
+      setEditingDesktopItemName('')
+      return
+    }
 
     setDesktopItems((current) =>
       current.map((item) =>
@@ -3221,6 +4227,40 @@ function App() {
     )
   }
 
+  function moveDesktopItemToDesktop(itemId: string, position?: { x: number; y: number }) {
+    const sourceItem = desktopItems.find((item) => item.id === itemId && item.trashedAt === null)
+    if (!sourceItem) {
+      return
+    }
+
+    const desktop = getDesktopBounds()
+    const fallbackPosition = getNextDesktopItemPosition(rootDesktopItems.length)
+    const nextPosition = position
+      ? {
+          x: clamp(position.x, desktop.x, desktop.x + desktop.width - 88),
+          y: clamp(position.y, desktop.y, desktop.y + desktop.height - 92),
+        }
+      : sourceItem.parentId === null
+        ? { x: sourceItem.x, y: sourceItem.y }
+        : fallbackPosition
+
+    if (
+      sourceItem.parentId === null &&
+      sourceItem.x === nextPosition.x &&
+      sourceItem.y === nextPosition.y
+    ) {
+      return
+    }
+
+    setDesktopItems((current) =>
+      current.map((item) =>
+        item.id === itemId
+          ? { ...item, parentId: null, x: nextPosition.x, y: nextPosition.y, trashedAt: null, updatedAt: Date.now() }
+          : item,
+      ),
+    )
+  }
+
   function moveDesktopItemToTrash(itemId: string) {
     deleteDesktopItem(itemId)
   }
@@ -3254,6 +4294,7 @@ function App() {
     }
 
     setDesktopItems((current) => [...current, nextItem])
+    pushToast(nextItem.kind === 'folder' ? 'Nueva carpeta' : nextItem.kind === 'text' ? 'Nuevo documento' : 'Nuevo archivo', nextItem.name)
   }
 
   function openDesktopFileItem(itemId: string) {
@@ -3277,16 +4318,32 @@ function App() {
     }
 
     if (isImageEntry(entry)) {
+      rememberRecent({
+        key: `path:${entry.path}`,
+        kind: 'path',
+        title: entry.name,
+        subtitle: entry.path,
+        path: entry.path,
+        icon: target.iconDataUrl ? { kind: 'image', value: target.iconDataUrl } : { kind: 'glyph', value: '🖼' },
+      })
       openMediaWindow('photos', entry)
       return
     }
 
     if (isVideoEntry(entry)) {
+      rememberRecent({
+        key: `path:${entry.path}`,
+        kind: 'path',
+        title: entry.name,
+        subtitle: entry.path,
+        path: entry.path,
+        icon: target.iconDataUrl ? { kind: 'image', value: target.iconDataUrl } : { kind: 'glyph', value: '🎬' },
+      })
       openMediaWindow('videos', entry)
       return
     }
 
-    void openSystemPath(target.sourcePath)
+    void openTrackedSystemPath(target.sourcePath, target.name, target.iconDataUrl)
   }
 
   function collectDesktopItemTree(sourceId: string) {
@@ -3380,7 +4437,86 @@ function App() {
     setContextMenu(null)
   }
 
+  function handleDesktopItemDragStart(event: DragEvent<HTMLElement>, itemId: string) {
+    event.dataTransfer.setData(DESKTOP_ITEM_DRAG_MIME, serializeDesktopItemDragPayload(itemId))
+    event.dataTransfer.effectAllowed = 'move'
+    const item = desktopItems.find((entry) => entry.id === itemId)
+    if (item) {
+      updateQuickLookCandidate(createQuickLookTargetFromDesktopItem(item))
+    }
+  }
+
+  function handleDesktopItemRootDragOver(event: DragEvent<HTMLElement>) {
+    if (!parseDesktopItemDragPayload(event.dataTransfer.getData(DESKTOP_ITEM_DRAG_MIME))) {
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+  }
+
+  function handleDesktopItemRootDrop(event: DragEvent<HTMLElement>, destinationParentId: string | null, position?: { x: number; y: number }) {
+    const draggedItemId = parseDesktopItemDragPayload(event.dataTransfer.getData(DESKTOP_ITEM_DRAG_MIME))
+    if (!draggedItemId) {
+      return
+    }
+    event.preventDefault()
+    event.stopPropagation()
+    if (destinationParentId === null) {
+      moveDesktopItemToDesktop(draggedItemId, position)
+      return
+    }
+    moveDesktopItemToFolder(draggedItemId, destinationParentId)
+  }
+
+  function handleDesktopItemFolderDragOver(event: DragEvent<HTMLElement>) {
+    const hasVirtualItem = !!parseDesktopItemDragPayload(event.dataTransfer.getData(DESKTOP_ITEM_DRAG_MIME))
+    const hasVolumeEntry = !!parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))
+    if (!hasVirtualItem && !hasVolumeEntry) {
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = hasVirtualItem ? 'move' : 'copy'
+  }
+
+  function handleDesktopItemFolderDrop(event: DragEvent<HTMLElement>, folderId: string) {
+    const draggedItemId = parseDesktopItemDragPayload(event.dataTransfer.getData(DESKTOP_ITEM_DRAG_MIME))
+    if (draggedItemId) {
+      event.preventDefault()
+      event.stopPropagation()
+      moveDesktopItemToFolder(draggedItemId, folderId)
+      return
+    }
+
+    const volumeEntry = parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))
+    if (!volumeEntry) {
+      return
+    }
+
+    event.preventDefault()
+    event.stopPropagation()
+    importVolumeEntryToDesktop(volumeEntry, folderId)
+  }
+
   function permanentlyDeleteDesktopItem(itemId: string) {
+    const target = desktopItems.find((item) => item.id === itemId)
+    if (!target) {
+      return
+    }
+
+    setContextMenu(null)
+    openSystemDialog(
+      {
+        title: 'Eliminar permanentemente',
+        message: `Se eliminara "${target.name}" de forma permanente y no podras recuperarlo desde la papelera.`,
+        confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
+        tone: 'danger',
+      },
+      () => permanentlyDeleteDesktopItemNow(itemId),
+    )
+  }
+
+  function permanentlyDeleteDesktopItemNow(itemId: string) {
     const descendants = new Set<string>([itemId])
     let changed = true
 
@@ -3396,6 +4532,7 @@ function App() {
 
     setDesktopItems((current) => current.filter((item) => !descendants.has(item.id)))
     setWindows((current) => current.filter((item) => !item.textDocumentId || !descendants.has(item.textDocumentId)))
+    pushToast('Elemento eliminado', 'Se borro de forma permanente.')
   }
 
   function emptyTrash() {
@@ -3405,9 +4542,24 @@ function App() {
       return
     }
 
+    setContextMenu(null)
+    openSystemDialog(
+      {
+        title: 'Vaciar papelera',
+        message: `Se eliminaran ${trashedIds.size} elemento${trashedIds.size === 1 ? '' : 's'} de forma permanente.`,
+        confirmLabel: 'Vaciar',
+        cancelLabel: 'Cancelar',
+        tone: 'danger',
+      },
+      () => emptyTrashNow(trashedIds),
+    )
+  }
+
+  function emptyTrashNow(trashedIds: Set<string>) {
     setDesktopItems((current) => current.filter((item) => !trashedIds.has(item.id)))
     setWindows((current) => current.filter((item) => !item.textDocumentId || !trashedIds.has(item.textDocumentId)))
     setContextMenu(null)
+    pushToast('Papelera vaciada', `${trashedIds.size} elemento${trashedIds.size === 1 ? '' : 's'} eliminado${trashedIds.size === 1 ? '' : 's'}.`)
   }
 
   function openDesktopDocument(itemId: string) {
@@ -3420,6 +4572,15 @@ function App() {
     if (!target) {
       return
     }
+
+    rememberRecent({
+      key: `document:${itemId}`,
+      kind: 'document',
+      title: target.name,
+      subtitle: target.content.trim() || 'Documento de texto',
+      itemId,
+      icon: target.iconDataUrl ? { kind: 'image', value: target.iconDataUrl } : { kind: 'glyph', value: '📄' },
+    })
 
     const existing = windows.find((item) => item.appId === 'textedit' && item.textDocumentId === itemId)
     if (existing) {
@@ -3449,6 +4610,15 @@ function App() {
       return
     }
 
+    const target = desktopItems.find((item) => item.id === itemId && item.kind === 'folder')
+    rememberRecent({
+      key: `route:${createDesktopFolderRoute(itemId)}`,
+      kind: 'route',
+      title: target?.name ?? 'Carpeta',
+      subtitle: 'Carpeta del escritorio',
+      route: createDesktopFolderRoute(itemId),
+      icon: { kind: 'glyph', value: '📁' },
+    })
     openOrFocusFinderRoute(createDesktopFolderRoute(itemId))
   }
 
@@ -3554,6 +4724,14 @@ function App() {
 
   function openSafariWindow(url?: string) {
     setLauncherOpen(false)
+    rememberRecent({
+      key: 'app:safari',
+      kind: 'app',
+      title: getResolvedApp('safari').name,
+      subtitle: url ? normalizeBrowserUrl(url) : 'Navegador',
+      appId: 'safari',
+      icon: getResolvedApp('safari').iconSpec,
+    })
     const nextWindow = createWindow('safari')
     if (nextWindow.browserState && url) {
       const normalized = normalizeBrowserUrl(url)
@@ -3571,6 +4749,14 @@ function App() {
 
   function openMediaWindow(appId: 'photos' | 'videos', entry: VolumeEntry) {
     setLauncherOpen(false)
+    rememberRecent({
+      key: `path:${entry.path}`,
+      kind: 'path',
+      title: entry.name,
+      subtitle: entry.path,
+      path: entry.path,
+      icon: entry.icon ? { kind: 'image', value: entry.icon } : { kind: 'glyph', value: appId === 'photos' ? '🖼' : '🎬' },
+    })
     const existing = windows.find((item) => item.appId === appId)
     if (existing) {
       if (appId === 'photos') {
@@ -3607,6 +4793,35 @@ function App() {
   }
 
   function closeWindow(id: string) {
+    const targetWindow = windows.find((item) => item.id === id)
+    if (!targetWindow) {
+      return
+    }
+
+    const linkedDocument = targetWindow.textDocumentId
+      ? desktopItems.find((item) => item.id === targetWindow.textDocumentId && item.kind === 'text')
+      : null
+    const needsConfirmation = targetWindow.appId === 'textedit' && !!linkedDocument?.content.trim()
+
+    if (needsConfirmation) {
+      openSystemDialog(
+        {
+          title: 'Cerrar documento',
+          message: `Cerrar "${targetWindow.title}" quitara esta ventana del escritorio actual.`,
+          confirmLabel: 'Cerrar',
+          cancelLabel: 'Cancelar',
+          tone: 'danger',
+        },
+        () => closeWindowNow(id),
+      )
+      return
+    }
+
+    closeWindowNow(id)
+  }
+
+  function closeWindowNow(id: string) {
+    const closingWindow = windows.find((item) => item.id === id)
     setWindows((current) =>
       current.flatMap((item) => {
         if (item.id !== id) {
@@ -3615,6 +4830,7 @@ function App() {
         return [{ ...item, genie: { mode: 'closing-fade', removeOnFinish: true } }]
       }),
     )
+    pushToast('Ventana cerrada', closingWindow?.title)
   }
 
   function minimizeWindow(id: string) {
@@ -3658,6 +4874,19 @@ function App() {
   }
 
   function toggleMaximize(id: string) {
+    const shouldAnimateWindowMorph = !prefersReducedMotion && maximizeAnimationDurationMs > 0
+    if (shouldAnimateWindowMorph) {
+      const existingTimer = windowMorphTimersRef.current[id]
+      if (existingTimer) {
+        window.clearTimeout(existingTimer)
+      }
+      setWindowMorphIds((current) => (current.includes(id) ? current : [...current, id]))
+      windowMorphTimersRef.current[id] = window.setTimeout(() => {
+        setWindowMorphIds((current) => current.filter((windowId) => windowId !== id))
+        delete windowMorphTimersRef.current[id]
+      }, maximizeAnimationDurationMs + 80)
+    }
+
     const desktop = getMaximizedBounds()
     setWindows((current) =>
       current.map((item) => {
@@ -3700,6 +4929,10 @@ function App() {
 
   function updateFinderViewMode(windowId: string, viewMode: FinderViewMode) {
     updateFinderWindow(windowId, (finderState) => ({ ...finderState, viewMode }))
+  }
+
+  function updateFinderSortMode(windowId: string, sortMode: FinderSortMode) {
+    updateFinderWindow(windowId, (finderState) => ({ ...finderState, sortMode }))
   }
 
   function navigateFinder(windowId: string, route: FinderRoute) {
@@ -3776,6 +5009,54 @@ function App() {
     )
   }
 
+  function applyDockPinnedOrder(nextOrder: string[]) {
+    setDockPinnedOrder(nextOrder)
+    setDockItems((current) => {
+      const currentSet = new Set(current)
+      const ordered = nextOrder
+        .filter((item) => item.startsWith('app:'))
+        .map((item) => item.slice('app:'.length) as AppId)
+        .filter((item) => currentSet.has(item))
+
+      current.forEach((item) => {
+        if (!ordered.includes(item)) {
+          ordered.push(item)
+        }
+      })
+
+      return ordered
+    })
+    setCustomDockItems((current) => {
+      const itemById = new Map(current.map((item) => [item.id, item]))
+      const ordered = nextOrder
+        .filter((item) => item.startsWith('custom:'))
+        .map((item) => itemById.get(item.slice('custom:'.length)))
+        .filter((item): item is CustomDockItem => !!item)
+
+      current.forEach((item) => {
+        if (!ordered.some((entry) => entry.id === item.id)) {
+          ordered.push(item)
+        }
+      })
+
+      return ordered
+    })
+  }
+
+  function reorderDockPinnedItems(targetId: string) {
+    const draggedId = dockDragItemIdRef.current
+    if (!draggedId) {
+      return
+    }
+
+    const nextOrder = moveDockPinnedItem(dockPinnedOrder, draggedId, targetId)
+    if (nextOrder === dockPinnedOrder) {
+      return
+    }
+
+    applyDockPinnedOrder(nextOrder)
+  }
+
   function addCustomDockItem(item: CustomDockItem) {
     setCustomDockItems((current) => {
       const exists = current.some((entry) => entry.target === item.target && entry.kind === item.kind)
@@ -3790,7 +5071,22 @@ function App() {
     setCustomDockItems((current) => current.filter((item) => item.id !== id))
   }
 
+  function updateCustomDockItem(id: string, patch: Partial<Pick<CustomDockItem, 'icon' | 'accent'>>) {
+    setCustomDockItems((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              ...patch,
+            }
+          : item,
+      ),
+    )
+  }
+
   function handleDockIconDragEnd(event: React.DragEvent<HTMLButtonElement>, id: string, removable: boolean) {
+    dockDragItemIdRef.current = null
+
     if (!removable) {
       return
     }
@@ -3836,6 +5132,7 @@ function App() {
     setNewDockIconKind('glyph')
     setNewDockIconValue('📁')
     setNewDockAccent('#4f7cff')
+    pushToast('Dock actualizado', `${name} se agrego al dock.`)
   }
 
   function pinInstalledAppToDock(app: InstalledApp) {
@@ -3844,9 +5141,10 @@ function App() {
       name: app.name,
       target: app.launchTarget || app.target,
       kind: 'app',
-      icon: { kind: 'glyph', value: '💻' },
+      icon: app.icon ? { kind: 'image', value: app.icon } : { kind: 'glyph', value: '💻' },
       accent: 'linear-gradient(135deg, #6ec3ff 0%, #4361ff 100%)',
     })
+    pushToast('Dock actualizado', `${app.name} se fijo en el dock.`)
   }
 
   function pinBuiltInAppToDock(appId: AppId) {
@@ -3855,6 +5153,7 @@ function App() {
     }
 
     setDockItems((current) => current.includes(appId) ? current : [...current, appId])
+    pushToast('Dock actualizado', `${getApp(appId).name} se fijo en el dock.`)
   }
 
   function unpinBuiltInAppFromDock(appId: AppId) {
@@ -3868,9 +5167,51 @@ function App() {
     }
 
     addCustomDockItem(createVolumeDockItem(volume))
+    pushToast('Dock actualizado', `${volume.name} se fijo en el dock.`)
+  }
+
+  function rememberRuntimeDockItem(item: CustomDockItem) {
+    setRuntimeDockItems((current) => {
+      const withoutMatch = current.filter((entry) => !(entry.kind === item.kind && entry.target === item.target))
+      return [...withoutMatch, item]
+    })
+  }
+
+  function dismissRuntimeDockItem(itemId: string) {
+    setRuntimeDockItems((current) => current.filter((item) => item.id !== itemId))
+  }
+
+  function pinTransientDockItem(itemId: string) {
+    const target = visibleTransientDockItems.find((item) => item.id === itemId)
+    if (!target) {
+      return
+    }
+
+    addCustomDockItem({
+      ...target,
+      id: `${target.kind}-${encodeURIComponent(target.target)}`,
+    })
+    dismissRuntimeDockItem(itemId)
+    pushToast('Dock actualizado', `${target.name} queda fijado en el dock.`)
   }
 
   function openOrFocusFinderRoute(route: FinderRoute, dockItemId?: string) {
+    const desktopFolderId = getDesktopFolderIdFromRoute(route)
+    const routeVolumeMount = getVolumeMountFromRoute(route)
+    const routeTitle = desktopFolderId
+      ? desktopItems.find((item) => item.id === desktopFolderId)?.name ?? getFinderLabel(route)
+      : routeVolumeMount
+        ? deviceInfo?.volumes.find((item) => item.mount === routeVolumeMount)?.name ?? getFinderLabel(route)
+        : getFinderLabel(route)
+
+    rememberRecent({
+      key: `route:${route}`,
+      kind: 'route',
+      title: routeTitle,
+      subtitle: `Finder · ${routeTitle}`,
+      route,
+      icon: { kind: 'glyph', value: '📁' },
+    })
     const targetMount = getVolumeMountFromRoute(route)
     const existingFinder = windows.find((item) => {
       if (item.appId !== 'finder' || !item.finderState) {
@@ -3913,6 +5254,8 @@ function App() {
 
   async function activateCustomDockItem(item: CustomDockItem) {
     setLauncherOpen(false)
+    setSpotlightOpen(false)
+    setDockFolderStackItemId(null)
     if (item.kind === 'url') {
       const safariWindow = windows.find((entry) => entry.appId === 'safari')
       if (!safariWindow) {
@@ -3932,11 +5275,50 @@ function App() {
       return
     }
 
+    if (item.kind === 'desktop-document') {
+      openDesktopDocument(item.target)
+      return
+    }
+
+    if (item.kind === 'path') {
+      const entry = getDockPathEntry(item.target, item.name)
+      if (isImageEntry(entry)) {
+        openMediaWindow('photos', entry)
+        return
+      }
+      if (isVideoEntry(entry)) {
+        openMediaWindow('videos', entry)
+        return
+      }
+      await openSystemPath(item.target)
+      return
+    }
+
     await launchSystemApp(item.target)
+  }
+
+  async function launchInstalledSystemApp(app: InstalledApp) {
+    rememberRecent({
+      key: `installed:${app.id}`,
+      kind: 'installed-app',
+      title: app.name,
+      subtitle: `${app.source} · ${app.target}`,
+      installedAppId: app.id,
+    })
+    rememberRuntimeDockItem({
+      id: createDockItemId('runtime-app', app.id),
+      name: app.name,
+      target: app.launchTarget || app.target,
+      kind: 'app',
+      icon: app.icon ? { kind: 'image', value: app.icon } : { kind: 'glyph', value: '💻' },
+      accent: 'transparent',
+    })
+    await launchSystemApp(app.launchTarget || app.target)
   }
 
   async function launchSystemApp(target: string) {
     setLauncherOpen(false)
+    setSpotlightOpen(false)
     if (window.electronDesktop) {
       const result = await window.electronDesktop.launchApp(target) as { ok?: boolean; error?: string | null }
       if (result?.ok === false) {
@@ -3961,6 +5343,19 @@ function App() {
 
   async function openSystemPath(target: string) {
     await launchSystemApp(target)
+  }
+
+  async function openTrackedSystemPath(target: string, label?: string, icon?: string | null) {
+    rememberRecent({
+      key: `path:${target}`,
+      kind: 'path',
+      title: label || getPathLeaf(target),
+      subtitle: target,
+      path: target,
+      icon: icon ? { kind: 'image', value: icon } : { kind: 'glyph', value: '📄' },
+    })
+    rememberRuntimeDockItem(createPathDockItem(target, label, icon))
+    await openSystemPath(target)
   }
 
   function setMediaWindowPath(windowId: string, nextPath: string, nextTitle?: string) {
@@ -4062,8 +5457,8 @@ function App() {
       const input = document.createElement('input')
       input.type = 'file'
       input.accept = kind === 'video'
-        ? '.mp4,.mov,.mkv,.avi,.webm,.m4v,video/*'
-        : '.png,.jpg,.jpeg,.gif,.webp,.bmp,.svg,.avif,image/*'
+        ? '.mp4,.m4v,.webm,.mov,.mkv,.avi,.ogv,.ogm,.mpeg,.mpg,.mpe,.mpv,.m2v,.ts,.mts,.m2ts,.3gp,.3g2,video/*'
+        : '.png,.jpg,.jpeg,.jfif,.pjpeg,.pjp,.gif,.webp,.bmp,.svg,.avif,.apng,.ico,image/*'
 
       const selected = await new Promise<File | null>((resolve) => {
         input.addEventListener('change', () => resolve(input.files?.[0] ?? null), { once: true })
@@ -4179,7 +5574,9 @@ function App() {
   function updateBrowserWindow(windowId: string, updater: (state: BrowserState) => BrowserState) {
     setWindows((current) =>
       current.map((item) =>
-        item.id === windowId && item.browserState ? { ...item, browserState: updater(item.browserState) } : item,
+        item.id === windowId && item.browserState
+          ? { ...item, browserState: syncBrowserState(updater(item.browserState)) }
+          : item,
       ),
     )
   }
@@ -4206,9 +5603,11 @@ function App() {
     delete browserProgressVisibleSinceRef.current[windowId]
     updateBrowserWindow(windowId, (browserState) => ({
       ...browserState,
-      loading: true,
-      progress: 0,
-      lastError: null,
+      tabs: browserState.tabs.map((tab) =>
+        tab.id === browserState.activeTabId
+          ? { ...tab, loading: true, progress: 0, lastError: null }
+          : tab,
+      ),
     }))
 
     browserProgressShowTimersRef.current[windowId] = window.setTimeout(() => {
@@ -4219,11 +5618,15 @@ function App() {
           return browserState
         }
 
-        return {
-          ...browserState,
-          progress: Math.max(browserState.progress, 14),
-        }
-      })
+          return {
+            ...browserState,
+            tabs: browserState.tabs.map((tab) =>
+              tab.id === browserState.activeTabId
+                ? { ...tab, progress: Math.max(tab.progress, 14) }
+                : tab,
+            ),
+          }
+        })
     }, BROWSER_PROGRESS_SHOW_DELAY_MS)
   }
 
@@ -4236,8 +5639,11 @@ function App() {
       clearBrowserProgressShow(windowId)
       updateBrowserWindow(windowId, (browserState) => ({
         ...browserState,
-        loading: false,
-        progress: 0,
+        tabs: browserState.tabs.map((tab) =>
+          tab.id === browserState.activeTabId
+            ? { ...tab, loading: false, progress: 0 }
+            : tab,
+        ),
       }))
       return
     }
@@ -4246,8 +5652,11 @@ function App() {
       browserProgressVisibleSinceRef.current[windowId] = Date.now()
       updateBrowserWindow(windowId, (browserState) => ({
         ...browserState,
-        loading: false,
-        progress: 100,
+        tabs: browserState.tabs.map((tab) =>
+          tab.id === browserState.activeTabId
+            ? { ...tab, loading: false, progress: 100 }
+            : tab,
+        ),
       }))
 
       browserProgressResetTimersRef.current[windowId] = window.setTimeout(() => {
@@ -4255,7 +5664,11 @@ function App() {
         delete browserProgressVisibleSinceRef.current[windowId]
         updateBrowserWindow(windowId, (browserState) => ({
           ...browserState,
-          progress: browserState.loading ? browserState.progress : 0,
+          tabs: browserState.tabs.map((tab) =>
+            tab.id === browserState.activeTabId
+              ? { ...tab, progress: tab.loading ? tab.progress : 0 }
+              : tab,
+          ),
         }))
       }, hasError ? BROWSER_PROGRESS_HIDE_DELAY_MS + 120 : BROWSER_PROGRESS_HIDE_DELAY_MS)
     }
@@ -4481,19 +5894,37 @@ function App() {
   }
 
   function setBrowserInput(windowId: string, value: string) {
-    updateBrowserWindow(windowId, (browserState) => ({ ...browserState, inputValue: value }))
+    updateBrowserWindow(windowId, (browserState) => ({
+      ...browserState,
+      tabs: browserState.tabs.map((tab) =>
+        tab.id === browserState.activeTabId
+          ? { ...tab, inputValue: value }
+          : tab,
+      ),
+    }))
   }
 
   function commitBrowserNavigation(windowId: string, rawValue: string) {
     const nextUrl = normalizeBrowserUrl(rawValue)
     beginBrowserProgress(windowId)
     updateBrowserWindow(windowId, (browserState) => {
-      const nextHistory = [...browserState.history.slice(0, browserState.historyIndex + 1), nextUrl]
+      const activeTab = getActiveBrowserTab(browserState)
+      if (!activeTab) {
+        return browserState
+      }
+      const nextHistory = [...activeTab.history.slice(0, activeTab.historyIndex + 1), nextUrl]
       return {
         ...browserState,
-        history: nextHistory,
-        historyIndex: nextHistory.length - 1,
-        inputValue: nextUrl,
+        tabs: browserState.tabs.map((tab) =>
+          tab.id === activeTab.id
+            ? {
+                ...tab,
+                history: nextHistory,
+                historyIndex: nextHistory.length - 1,
+                inputValue: nextUrl,
+              }
+            : tab,
+        ),
       }
     })
     window.electronDesktop?.browser.navigate(nextUrl)
@@ -4502,11 +5933,22 @@ function App() {
   function moveBrowserHistory(windowId: string, direction: -1 | 1) {
     beginBrowserProgress(windowId)
     updateBrowserWindow(windowId, (browserState) => {
-      const nextIndex = clamp(browserState.historyIndex + direction, 0, browserState.history.length - 1)
+      const activeTab = getActiveBrowserTab(browserState)
+      if (!activeTab) {
+        return browserState
+      }
+      const nextIndex = clamp(activeTab.historyIndex + direction, 0, activeTab.history.length - 1)
       return {
         ...browserState,
-        historyIndex: nextIndex,
-        inputValue: browserState.history[nextIndex],
+        tabs: browserState.tabs.map((tab) =>
+          tab.id === activeTab.id
+            ? {
+                ...tab,
+                historyIndex: nextIndex,
+                inputValue: activeTab.history[nextIndex],
+              }
+            : tab,
+        ),
       }
     })
 
@@ -4521,9 +5963,82 @@ function App() {
     beginBrowserProgress(windowId)
     updateBrowserWindow(windowId, (browserState) => ({
       ...browserState,
-      reloadKey: browserState.reloadKey + 1,
+      tabs: browserState.tabs.map((tab) =>
+        tab.id === browserState.activeTabId
+          ? { ...tab, reloadKey: tab.reloadKey + 1 }
+          : tab,
+      ),
     }))
     window.electronDesktop?.browser.reload()
+  }
+
+  function openBrowserTab(windowId: string, initialUrl = SAFARI_HOME_URL) {
+    const normalized = normalizeBrowserUrl(initialUrl)
+    updateBrowserWindow(windowId, (browserState) => {
+      const nextTab: BrowserTab = {
+        id: `browser-tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        history: [normalized],
+        historyIndex: 0,
+        inputValue: normalized,
+        reloadKey: 0,
+        loading: false,
+        progress: 0,
+        title: '',
+        lastError: null,
+      }
+
+      return {
+        ...browserState,
+        tabs: [...browserState.tabs, nextTab],
+        activeTabId: nextTab.id,
+      }
+    })
+    window.electronDesktop?.browser.navigate(normalized)
+    beginBrowserProgress(windowId)
+  }
+
+  function selectBrowserTab(windowId: string, tabId: string) {
+    const targetWindow = windows.find((item) => item.id === windowId && item.browserState)
+    const targetTab = targetWindow?.browserState?.tabs.find((tab) => tab.id === tabId)
+    updateBrowserWindow(windowId, (browserState) => ({
+      ...browserState,
+      activeTabId: tabId,
+    }))
+    if (targetTab) {
+      window.electronDesktop?.browser.navigate(targetTab.history[targetTab.historyIndex] ?? SAFARI_HOME_URL)
+      beginBrowserProgress(windowId)
+    }
+  }
+
+  function closeBrowserTab(windowId: string, tabId: string) {
+    const targetWindow = windows.find((item) => item.id === windowId && item.browserState)
+    if (targetWindow?.browserState && targetWindow.browserState.tabs.length <= 1) {
+      closeWindow(windowId)
+      return
+    }
+
+    updateBrowserWindow(windowId, (browserState) => {
+      const closingIndex = browserState.tabs.findIndex((tab) => tab.id === tabId)
+      const nextTabs = browserState.tabs.filter((tab) => tab.id !== tabId)
+      const nextActiveTabId = browserState.activeTabId === tabId
+        ? nextTabs[Math.max(0, closingIndex - 1)]?.id ?? nextTabs[0]?.id ?? browserState.activeTabId
+        : browserState.activeTabId
+
+      return {
+        ...browserState,
+        tabs: nextTabs,
+        activeTabId: nextActiveTabId,
+      }
+    })
+
+    const currentTabs = targetWindow?.browserState?.tabs ?? []
+    const closingIndex = currentTabs.findIndex((tab) => tab.id === tabId)
+    const nextTabs = currentTabs.filter((tab) => tab.id !== tabId)
+    const nextActiveTab = nextTabs[Math.max(0, closingIndex - 1)] ?? nextTabs[0]
+    if (nextActiveTab) {
+      window.electronDesktop?.browser.navigate(nextActiveTab.history[nextActiveTab.historyIndex] ?? SAFARI_HOME_URL)
+      beginBrowserProgress(windowId)
+    }
   }
 
   function openBrowserExternally(url: string) {
@@ -4541,19 +6056,16 @@ function App() {
 
   function renderFinderCard(windowId: string, route: FinderRoute, subtitle: string) {
     return (
-      <button
-        key={route}
-        type="button"
-        className="finder-card"
+      <FinderCard
+        route={route}
+        label={getFinderRouteLabel(route)}
+        subtitle={subtitle}
         onClick={() => navigateFinder(windowId, route)}
         onContextMenu={(event) => {
           event.preventDefault()
           setContextMenu({ type: 'finder', x: event.clientX, y: event.clientY, windowId, route, label: getFinderRouteLabel(route) })
         }}
-      >
-        <strong>{getFinderRouteLabel(route)}</strong>
-        <span>{subtitle}</span>
-      </button>
+      />
     )
   }
 
@@ -4565,52 +6077,12 @@ function App() {
     extension?: string
     iconSrc?: string | null
     onClick: () => void
+    onFocus?: () => void
     onContextMenu?: (event: React.MouseEvent<HTMLButtonElement>) => void
     draggable?: boolean
     onDragStart?: (event: React.DragEvent<HTMLButtonElement>) => void
   }) {
-    const { keyId, name, subtitle, sourcePath, extension = '', iconSrc, onClick, onContextMenu, draggable, onDragStart } = options
-    const isImage = !!sourcePath && isImageEntry({ name, path: sourcePath, kind: 'file', extension, sizeBytes: null })
-    const isVideo = !!sourcePath && isVideoEntry({ name, path: sourcePath, kind: 'file', extension, sizeBytes: null })
-
-    return (
-      <button
-        key={keyId}
-        type="button"
-        className="finder-file-tile"
-        onClick={onClick}
-        onContextMenu={onContextMenu}
-        draggable={draggable}
-        onDragStart={onDragStart}
-      >
-        {isImage && sourcePath ? (
-          <img className="finder-file-thumb image" src={getMediaSource(sourcePath)} alt="" draggable={false} />
-        ) : iconSrc ? (
-          <img className="finder-file-thumb custom-icon" src={iconSrc} alt="" draggable={false} />
-        ) : isVideo && sourcePath ? (
-          <video
-            className="finder-file-thumb video"
-            src={getMediaSource(sourcePath)}
-            muted
-            playsInline
-            preload="metadata"
-            draggable={false}
-            onLoadedMetadata={(event) => {
-              const video = event.currentTarget
-              if (video.duration > 0.12) {
-                video.currentTime = 0.12
-              }
-            }}
-          />
-        ) : (
-          <span className={`finder-file-thumb${extension ? ' generic' : ''}`} aria-hidden="true">
-            {extension ? extension.replace('.', '').slice(0, 4).toUpperCase() || 'FILE' : 'DOC'}
-          </span>
-        )}
-        <strong>{name}</strong>
-        <span>{subtitle}</span>
-      </button>
-    )
+    return <FinderFileTile {...options} />
   }
 
   function renderDisplayCard(subtitle: string) {
@@ -4627,6 +6099,28 @@ function App() {
     )
   }
 
+  function getVisibleEntries(targetPath: string | null, entries: VolumeEntry[]) {
+    if (!targetPath || !initialLowEndDevice) {
+      return entries
+    }
+
+    const visibleCount = visibleEntryCountsByPath[targetPath]
+    return typeof visibleCount === 'number' ? entries.slice(0, visibleCount) : entries
+  }
+
+  function renderProgressiveStatus(visibleCount: number, totalCount: number, onShowMore: () => void) {
+    if (visibleCount >= totalCount) {
+      return null
+    }
+
+    return (
+      <div className="progressive-load-note">
+        <span>Mostrando {visibleCount} de {totalCount} elementos.</span>
+        <button type="button" onClick={onShowMore}>Cargar mas ahora</button>
+      </div>
+    )
+  }
+
   function renderFinderContent(windowItem: WindowState) {
     const finderState = windowItem.finderState
     const activeRoute = getActiveFinderRoute(finderState)
@@ -4640,11 +6134,16 @@ function App() {
           ? []
           : desktopItems.filter((item) => item.parentId === (activeDesktopFolderId ?? null) && item.trashedAt === null)
         : []
-    const activeDesktopFolders = activeDesktopItems.filter((item) => item.kind === 'folder')
-    const activeDesktopFiles = activeDesktopItems.filter((item) => item.kind !== 'folder')
+    const sortMode = finderState?.sortMode ?? 'name'
+    const sortedDesktopItems = sortDesktopEntries(activeDesktopItems, sortMode)
+    const activeDesktopFolders = sortedDesktopItems.filter((item) => item.kind === 'folder')
+    const activeDesktopFiles = sortedDesktopItems.filter((item) => item.kind !== 'folder')
     const activeImportedEntries = activeDesktopFolder?.sourcePath ? volumeEntriesByMount[activeDesktopFolder.sourcePath] ?? [] : []
-    const activeImportedFolders = activeImportedEntries.filter((entry) => entry.kind === 'directory')
-    const activeImportedFiles = activeImportedEntries.filter((entry) => entry.kind !== 'directory')
+    const activeImportedMeta = activeDesktopFolder?.sourcePath ? volumeEntryMetaByPath[activeDesktopFolder.sourcePath] : undefined
+    const visibleImportedEntries = getVisibleEntries(activeDesktopFolder?.sourcePath ?? null, activeImportedEntries)
+    const sortedImportedEntries = sortVolumeEntries(visibleImportedEntries, sortMode)
+    const activeImportedFolders = sortedImportedEntries.filter((entry) => entry.kind === 'directory')
+    const activeImportedFiles = sortedImportedEntries.filter((entry) => entry.kind !== 'directory')
     const activeImportedLoading = activeDesktopFolder?.sourcePath ? !!loadingVolumeMounts[activeDesktopFolder.sourcePath] : false
     const activeVolumeMount = getVolumeMountFromRoute(activeRoute)
     const activeVolumePath = getVolumePathFromRoute(activeRoute)
@@ -4652,16 +6151,19 @@ function App() {
       ? deviceInfo?.volumes.find((volume) => volume.mount === activeVolumeMount) ?? null
       : null
     const activeVolumeEntries = activeVolumePath ? volumeEntriesByMount[activeVolumePath] ?? [] : []
-    const activeVolumeFolders = activeVolumeEntries.filter((entry) => entry.kind === 'directory')
-    const activeVolumeFiles = activeVolumeEntries.filter((entry) => entry.kind !== 'directory')
+    const activeVolumeMeta = activeVolumePath ? volumeEntryMetaByPath[activeVolumePath] : undefined
+    const visibleVolumeEntries = getVisibleEntries(activeVolumePath, activeVolumeEntries)
+    const sortedVolumeEntries = sortVolumeEntries(visibleVolumeEntries, sortMode)
+    const activeVolumeFolders = sortedVolumeEntries.filter((entry) => entry.kind === 'directory')
+    const activeVolumeFiles = sortedVolumeEntries.filter((entry) => entry.kind !== 'directory')
     const activeVolumeLoading = activeVolumePath ? !!loadingVolumeMounts[activeVolumePath] : false
+    const finderSidebarVolumes = (deviceInfo?.volumes ?? []).map((volume) => ({
+      ...volume,
+      route: createVolumeRoute(volume.mount),
+    }))
+    const finderRecentItems = recentItems.slice(0, 18)
     const viewMode = finderState?.viewMode ?? 'icons'
-    const renderFinderListHeader = (secondaryLabel: string) => (
-      <div className="finder-list-head" aria-hidden="true">
-        <span>Nombre</span>
-        <span>{secondaryLabel}</span>
-      </div>
-    )
+    const renderFinderListHeader = (secondaryLabel: string) => <FinderListHeader secondaryLabel={secondaryLabel} />
 
     return (
       <div className="finder-shell finder-inline-toolbar">
@@ -4691,82 +6193,41 @@ function App() {
         </div>
 
         <div className="finder-layout">
-          <aside className="finder-sidebar">
-            <button
-              type="button"
-              className={activeRoute === 'desktop' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'desktop')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('desktop')}</span>
-              <span>Escritorio</span>
-            </button>
-            <button
-              type="button"
-              className={activeRoute === 'trash' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'trash')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('trash')}</span>
-              <span>Papelera</span>
-            </button>
-            <button
-              type="button"
-              className={activeRoute === 'computer' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'computer')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('computer')}</span>
-              <span>Equipo</span>
-            </button>
-            <button
-              type="button"
-              className={activeRoute === 'device' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'device')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('device')}</span>
-              <span>Dispositivo</span>
-            </button>
-            <button
-              type="button"
-              className={activeRoute === 'applications' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'applications')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('applications')}</span>
-              <span>Aplicaciones</span>
-            </button>
-            <button
-              type="button"
-              className={activeRoute === 'dock' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'dock')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('dock')}</span>
-              <span>Dock</span>
-            </button>
-            <button
-              type="button"
-              className={activeRoute === 'display' ? 'active' : ''}
-              onClick={() => navigateFinder(windowItem.id, 'display')}
-            >
-              <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon('display')}</span>
-              <span>Pantalla</span>
-            </button>
-            {deviceInfo?.volumes.length ? (
-              <div className="finder-sidebar-section">
-                <span>Unidades</span>
-                {deviceInfo.volumes.map((volume) => (
-                  <button
-                    key={volume.mount}
-                    type="button"
-                    className={activeVolumeMount === volume.mount ? 'active' : ''}
-                    onClick={() => navigateFinder(windowItem.id, createVolumeRoute(volume.mount))}
-                  >
-                    <span className="finder-sidebar-icon" aria-hidden="true">{getFinderRouteIcon(createVolumeRoute(volume.mount))}</span>
-                    <span>{volume.name}</span>
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </aside>
+          <FinderSidebar
+            activeRoute={activeRoute}
+            activeVolumeMount={activeVolumeMount}
+            volumes={finderSidebarVolumes}
+            onNavigate={(route) => navigateFinder(windowItem.id, route)}
+            renderRouteIcon={(route) => getFinderRouteIcon(route)}
+          />
 
           <div className="finder-panel">
+            <div className="finder-panel-toolbar">
+              <div className="finder-panel-toolbar-copy">
+                <strong>{getFinderRouteLabel(activeRoute)}</strong>
+                <span>
+                  {activeRoute === 'recents'
+                    ? `${finderRecentItems.length} elemento${finderRecentItems.length === 1 ? '' : 's'} reciente${finderRecentItems.length === 1 ? '' : 's'}`
+                    : sortMode === 'name'
+                      ? 'Ordenado por nombre'
+                      : sortMode === 'type'
+                        ? 'Ordenado por tipo'
+                        : sortMode === 'date'
+                          ? 'Ordenado por fecha'
+                          : 'Ordenado por tamano'}
+                </span>
+              </div>
+              <label className="finder-sort-field">
+                <span>Ordenar</span>
+                <select value={sortMode} onChange={(event) => updateFinderSortMode(windowItem.id, event.target.value as FinderSortMode)}>
+                  <option value="name">Nombre</option>
+                  <option value="type">Tipo</option>
+                  <option value="date">Fecha</option>
+                  <option value="size">Tamano</option>
+                </select>
+              </label>
+            </div>
+
             {activeRoute === 'computer' ? (
               <>
                 <h2>Equipo</h2>
@@ -4776,6 +6237,7 @@ function App() {
                   {renderFinderCard(windowItem.id, 'trash', 'Elementos eliminados del escritorio virtual')}
                   {renderFinderCard(windowItem.id, 'device', 'CPU, RAM, sistema operativo y discos')}
                   {renderFinderCard(windowItem.id, 'applications', 'Apps detectadas segun el sistema operativo')}
+                  {renderFinderCard(windowItem.id, 'recents', 'Archivos, apps y carpetas usados recientemente')}
                   {renderFinderCard(windowItem.id, 'dock', 'Personaliza los iconos del dock inferior')}
                   {renderDisplayCard('Cambia apariencia y fondo de pantalla')}
                   {deviceInfo?.volumes.map((volume) =>
@@ -4791,7 +6253,6 @@ function App() {
 
             {activeRoute === 'desktop' || activeDesktopFolderId ? (
               <div
-                className="device-panel"
                 onContextMenu={(event) => {
                   const target = event.target as HTMLElement
                   if (
@@ -4810,220 +6271,83 @@ function App() {
                   }, event.clientX, event.clientY)
                 }}
               >
-                <h2>{getFinderRouteLabel(activeRoute)}</h2>
-                <p>{activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : activeDesktopFolder?.sourcePath ? activeDesktopFolder.sourcePath : 'Contenido de la carpeta virtual.'}</p>
-                {!activeImportedLoading && activeDesktopItems.length === 0 && activeImportedEntries.length === 0 ? <p>Esta ubicacion aun no tiene elementos.</p> : null}
-                {activeImportedLoading ? <p>Cargando contenido importado...</p> : null}
-                {activeDesktopFolders.length && viewMode === 'icons' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Carpetas</strong>
-                    <div className="finder-folder-grid">
-                      {activeDesktopFolders.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="finder-folder-tile"
-                          onClick={() => navigateFinder(windowItem.id, createDesktopFolderRoute(item.id))}
-                        >
-                          <span className="finder-folder-icon" aria-hidden="true" />
-                          <strong>{item.name}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                 {activeDesktopFolders.length && viewMode === 'list' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Carpetas</strong>
-                    {renderFinderListHeader('Tipo')}
-                    <div className="finder-file-list">
-                      {activeDesktopFolders.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="finder-file-row interactive"
-                          onClick={() => navigateFinder(windowItem.id, createDesktopFolderRoute(item.id))}
-                        >
-                          <strong>{item.name}</strong>
-                          <span>Carpeta</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeDesktopFiles.length && viewMode === 'list' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Documentos</strong>
-                    {renderFinderListHeader('Tipo')}
-                    <div className="finder-file-list">
-                      {activeDesktopFiles.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          className="finder-file-row interactive"
-                          onClick={() => {
-                            if (item.kind === 'text') {
-                              openDesktopDocument(item.id)
-                            } else {
-                              openDesktopFileItem(item.id)
-                            }
-                          }}
-                        >
-                          <strong>{item.name}</strong>
-                          <span>{item.kind === 'text' ? 'Documento de texto' : item.extension || 'Archivo importado'}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeDesktopFiles.length && viewMode === 'icons' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Documentos</strong>
-                    <div className="finder-file-grid">
-                      {activeDesktopFiles.map((item) =>
-                        renderFinderFileTile({
-                          keyId: item.id,
-                          name: item.name,
-                          subtitle: item.kind === 'text' ? 'Documento de texto' : item.extension || 'Archivo importado',
-                          sourcePath: item.sourcePath,
-                          extension: item.extension,
-                          iconSrc: item.iconDataUrl,
-                          onClick: () => {
-                            if (item.kind === 'text') {
-                              openDesktopDocument(item.id)
-                            } else {
-                              openDesktopFileItem(item.id)
-                            }
-                          },
-                        }),
-                      )}
-                    </div>
-                  </div>
-                ) : null}
-                {activeImportedFolders.length && viewMode === 'icons' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Carpetas importadas</strong>
-                    <div className="finder-folder-grid">
-                      {activeImportedFolders.map((entry) => (
-                        <button
-                          key={entry.path}
-                          type="button"
-                          className="finder-folder-tile"
-                          onClick={() => {
-                            importVolumeEntryToDesktop(entry, activeDesktopFolderId ?? null)
-                          }}
-                        >
-                          <span className="finder-folder-icon" aria-hidden="true" />
-                          <strong>{entry.name}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeImportedFolders.length && viewMode === 'list' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Carpetas importadas</strong>
-                    {renderFinderListHeader('Tipo')}
-                    <div className="finder-file-list">
-                      {activeImportedFolders.map((entry) => (
-                        <button
-                          key={entry.path}
-                          type="button"
-                          className="finder-file-row interactive"
-                          onClick={() => {
-                            importVolumeEntryToDesktop(entry, activeDesktopFolderId ?? null)
-                          }}
-                          onContextMenu={(event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          }}
-                        >
-                          <strong>{entry.name}</strong>
-                          <span>Carpeta importada</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeImportedFiles.length && viewMode === 'list' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Archivos importados</strong>
-                    {renderFinderListHeader('Tamaño')}
-                    <div className="finder-file-list">
-                      {activeImportedFiles.map((entry) => (
-                        <button
-                          key={entry.path}
-                          type="button"
-                          className="finder-file-row interactive"
-                          onClick={() => void (async () => {
-                            if (isImageEntry(entry)) {
-                              openMediaWindow('photos', entry)
-                              return
-                            }
-                            if (isVideoEntry(entry)) {
-                              openMediaWindow('videos', entry)
-                              return
-                            }
-                            await openSystemPath(entry.path)
-                          })()}
-                          onContextMenu={(event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          }}
-                        >
-                          <strong>{entry.name}</strong>
-                          <span>{formatVolumeSize(entry.sizeBytes)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeImportedFiles.length && viewMode === 'icons' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Archivos importados</strong>
-                    <div className="finder-file-grid">
-                      {activeImportedFiles.map((entry) =>
-                        renderFinderFileTile({
-                          keyId: entry.path,
-                          name: entry.name,
-                          subtitle: formatVolumeSize(entry.sizeBytes),
-                          sourcePath: entry.path,
-                          extension: entry.extension,
-                          iconSrc: entry.icon,
-                          onClick: () => {
-                            void (async () => {
-                              if (isImageEntry(entry)) {
-                                openMediaWindow('photos', entry)
-                                return
-                              }
-                              if (isVideoEntry(entry)) {
-                                openMediaWindow('videos', entry)
-                                return
-                              }
-                              await openSystemPath(entry.path)
-                            })()
-                          },
-                          onContextMenu: (event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          },
-                        }),
-                      )}
-                    </div>
-                  </div>
-                ) : null}
+                <FinderDesktopPanel
+                  title={getFinderRouteLabel(activeRoute)}
+                  subtitle={activeRoute === 'desktop' ? 'Elementos virtuales del escritorio de Mactorno.' : activeDesktopFolder?.sourcePath ? activeDesktopFolder.sourcePath : 'Contenido de la carpeta virtual.'}
+                  activeImportedLoading={activeImportedLoading}
+                  activeDesktopItemsLength={activeDesktopItems.length}
+                  activeImportedEntriesLength={activeImportedEntries.length}
+                  activeDesktopFolders={activeDesktopFolders}
+                  activeDesktopFiles={activeDesktopFiles}
+                  activeImportedFolders={activeImportedFolders}
+                  activeImportedFiles={activeImportedFiles}
+                  viewMode={viewMode}
+                  renderFinderListHeader={renderFinderListHeader}
+                  renderFinderFileTile={renderFinderFileTile}
+                  onDesktopFolderOpen={(item) => navigateFinder(windowItem.id, createDesktopFolderRoute(item.id))}
+                  onDesktopItemDragStart={(event, item) => handleDesktopItemDragStart(event, item.id)}
+                  onDesktopFolderDragOver={(event, item) => {
+                    if (item.kind !== 'folder') {
+                      return
+                    }
+                    handleDesktopItemFolderDragOver(event)
+                  }}
+                  onDesktopFolderDrop={(event, item) => {
+                    if (item.kind !== 'folder') {
+                      return
+                    }
+                    handleDesktopItemFolderDrop(event, item.id)
+                  }}
+                  onDesktopRootDragOver={handleDesktopItemRootDragOver}
+                  onDesktopRootDrop={(event) => handleDesktopItemRootDrop(event, activeDesktopFolderId ?? null)}
+                  onDesktopItemFocus={(item) => updateQuickLookCandidate(createQuickLookTargetFromDesktopItem(item))}
+                  onDesktopFileOpen={(item) => {
+                    if (item.kind === 'text') {
+                      openDesktopDocument(item.id)
+                    } else {
+                      openDesktopFileItem(item.id)
+                    }
+                  }}
+                  onImportedFolderImport={(entry) => {
+                    importVolumeEntryToDesktop(entry, activeDesktopFolderId ?? null)
+                  }}
+                  onImportedEntryFocus={(entry) => updateQuickLookCandidate(createQuickLookTargetFromVolumeEntry(entry))}
+                  onImportedEntryOpen={(entry) => {
+                    void (async () => {
+                      if (isImageEntry(entry)) {
+                        openMediaWindow('photos', entry)
+                        return
+                      }
+                      if (isVideoEntry(entry)) {
+                        openMediaWindow('videos', entry)
+                        return
+                      }
+                      await openTrackedSystemPath(entry.path, entry.name, entry.icon ?? null)
+                    })()
+                  }}
+                  onImportedEntryContextMenu={(event, entry) => {
+                    event.preventDefault()
+                    openContextMenuAt({
+                      type: 'volume-entry',
+                      label: entry.name,
+                      entry,
+                    }, event.clientX, event.clientY)
+                  }}
+                  progressiveStatus={renderProgressiveStatus(
+                    visibleImportedEntries.length,
+                    activeImportedMeta?.total ?? activeImportedEntries.length,
+                    () => {
+                      if (!activeDesktopFolder?.sourcePath) {
+                        return
+                      }
+                      void loadVolumeEntriesPage(activeDesktopFolder.sourcePath, { forceFullIcons: true })
+                      setVisibleEntryCountsByPath((current) => ({
+                        ...current,
+                        [activeDesktopFolder.sourcePath!]: activeImportedMeta?.total ?? activeImportedEntries.length,
+                      }))
+                    },
+                  )}
+                />
               </div>
             ) : null}
 
@@ -5073,8 +6397,11 @@ function App() {
                       <article><strong>Arquitectura</strong><span>{deviceInfo.arch}</span></article>
                       <article><strong>CPU</strong><span>{deviceInfo.cpuModel}</span></article>
                       <article><strong>Nucleos</strong><span>{deviceInfo.cpuCount}</span></article>
+                      <article><strong>GPU</strong><span>{deviceInfo.gpuModel ?? 'No detectada'}</span></article>
+                      <article><strong>VRAM</strong><span>{deviceInfo.videoMemoryMb ? `${deviceInfo.videoMemoryMb} MB` : 'Compartida / no disponible'}</span></article>
                       <article><strong>RAM total</strong><span>{deviceInfo.totalMemoryGb} GB</span></article>
                       <article><strong>RAM libre</strong><span>{deviceInfo.freeMemoryGb} GB</span></article>
+                      <article><strong>Perfil visual</strong><span>{resolvedPerformanceProfile}</span></article>
                       <article><strong>Usuario</strong><span>{deviceInfo.userName}</span></article>
                       <article><strong>Home</strong><span>{deviceInfo.homeDir}</span></article>
                     </div>
@@ -5093,38 +6420,52 @@ function App() {
             ) : null}
 
             {activeRoute === 'applications' ? (
+              <FinderApplicationsPanel
+                osName={deviceInfo?.osName}
+                installedApps={installedApps}
+                visibleInstalledAppsCount={visibleInstalledAppsCount}
+                renderAppIcon={(app) => renderInstalledAppIcon(app)}
+                onLaunch={(app) => void launchInstalledSystemApp(app)}
+                onAppContextMenu={(event, app) => {
+                  event.preventDefault()
+                  setContextMenu({
+                    type: 'finder',
+                    x: event.clientX,
+                    y: event.clientY,
+                    windowId: windowItem.id,
+                    route: 'applications',
+                    label: app.name,
+                  })
+                }}
+                onShowAll={() => setVisibleInstalledAppsCount(installedApps.length)}
+                renderProgressiveStatus={renderProgressiveStatus}
+              />
+            ) : null}
+
+            {activeRoute === 'recents' ? (
               <div className="device-panel">
-                <h2>Aplicaciones del dispositivo</h2>
-                <p>{deviceInfo ? `Sistema detectado: ${deviceInfo.osName}` : 'Leyendo sistema operativo...'}</p>
-                <div className="apps-list">
-                  {installedApps.slice(0, 60).map((app) => (
-                    <button
-                      key={app.id}
-                      type="button"
-                      className="app-row"
-                      onClick={() => void launchSystemApp(app.launchTarget || app.target)}
-                      onContextMenu={(event) => {
-                        event.preventDefault()
-                        setContextMenu({
-                          type: 'finder',
-                          x: event.clientX,
-                          y: event.clientY,
-                          windowId: windowItem.id,
-                          route: 'applications',
-                          label: app.name,
-                        })
-                      }}
-                    >
-                      <span className="app-row-main">
-                        {renderInstalledAppIcon(app)}
-                        <span className="app-row-copy">
-                          <strong>{app.name}</strong>
-                          <span>{app.source}</span>
-                        </span>
-                      </span>
-                    </button>
-                  ))}
-                </div>
+                <h2>Recientes</h2>
+                <p>Accesos recientes para archivos, apps, rutas del Finder y elementos externos.</p>
+                {finderRecentItems.length ? (
+                  <>
+                    {renderFinderListHeader('Lugar')}
+                    <div className="finder-file-list">
+                      {finderRecentItems.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="finder-file-row interactive"
+                          onClick={() => activateRecentItem(item)}
+                        >
+                          <strong>{item.title}</strong>
+                          <span>{item.subtitle}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <p>Aun no hay elementos recientes en esta sesion.</p>
+                )}
               </div>
             ) : null}
 
@@ -5132,6 +6473,18 @@ function App() {
               <div className="device-panel">
                 <h2>Dock</h2>
                 <p>Activa o desactiva iconos y personaliza su apariencia. Finder se mantiene fijo.</p>
+                <div className="dock-settings-list">
+                  <div className="dock-setting">
+                    <label className="dock-toggle-row">
+                      <input
+                        type="checkbox"
+                        checked={dockHoverAnimationEnabled}
+                        onChange={(event) => setDockHoverAnimationEnabled(event.target.checked)}
+                      />
+                      <span>Animacion del dock al pasar el cursor</span>
+                    </label>
+                  </div>
+                </div>
                 <div className="dock-settings-list">
                   {APPS.filter((app) => app.dockable).map((app) => {
                     const resolvedApp = getResolvedApp(app.id)
@@ -5179,16 +6532,18 @@ function App() {
                 {customDockItems.length ? (
                   <div className="apps-list">
                     {customDockItems.map((item) => (
-                      <div key={item.id} className="app-row">
+                      <div key={item.id} className="dock-setting dock-setting-editor">
                         <div className="custom-dock-meta">
                           <strong>{item.name}</strong>
                           <span>{item.target}</span>
                         </div>
-                        <div className="custom-dock-actions">
-                          <div className="icon-preview-chip small" style={{ background: item.accent }}>
-                            {renderDockIconContent(item.icon)}
-                          </div>
-                        </div>
+                        {renderIconEditor({
+                          label: `Icono de ${item.name}`,
+                          icon: item.icon,
+                          accent: item.accent,
+                          onIconChange: (icon) => updateCustomDockItem(item.id, { icon }),
+                          onAccentChange: (accent) => updateCustomDockItem(item.id, { accent }),
+                        })}
                         <button type="button" onClick={() => removeCustomDockItem(item.id)}>Quitar</button>
                       </div>
                     ))}
@@ -5206,174 +6561,60 @@ function App() {
             ) : null}
 
             {activeVolumeMount ? (
-              <div className="device-panel">
-                <h2>{activeVolume?.name ?? formatVolumeLabel(activeVolumeMount)}</h2>
-                <p>{activeVolumePath ?? activeVolume?.mount ?? activeVolumeMount}</p>
-                {activeVolume ? (
-                  <div className="finder-volume-summary">
-                    <article>
-                      <strong>Capacidad</strong>
-                      <span>{activeVolume.totalGb} GB</span>
-                    </article>
-                    <article>
-                      <strong>Libre</strong>
-                      <span>{activeVolume.freeGb} GB</span>
-                    </article>
-                  </div>
-                ) : null}
-                {activeVolumeLoading ? <p>Cargando contenido de la unidad...</p> : null}
-                {!activeVolumeLoading && activeVolumeEntries.length === 0 ? (
-                  <p>No se encontraron elementos visibles en esta unidad.</p>
-                ) : null}
-                {activeVolumeFolders.length && viewMode === 'icons' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Carpetas</strong>
-                    <div className="finder-folder-grid">
-                      {activeVolumeFolders.map((entry) => (
-                        <button
-                          key={entry.path}
-                          type="button"
-                          className="finder-folder-tile"
-                          onClick={() => navigateFinder(windowItem.id, createVolumeSubRoute(activeVolumeMount, entry.path))}
-                          draggable
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
-                            event.dataTransfer.effectAllowed = 'copy'
-                          }}
-                          onContextMenu={(event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          }}
-                        >
-                          <span className="finder-folder-icon" aria-hidden="true" />
-                          <strong>{entry.name}</strong>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeVolumeFolders.length && viewMode === 'list' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Carpetas</strong>
-                    {renderFinderListHeader('Tipo')}
-                    <div className="finder-file-list">
-                      {activeVolumeFolders.map((entry) => (
-                        <button
-                          key={entry.path}
-                          type="button"
-                          className="finder-file-row interactive"
-                          draggable
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
-                            event.dataTransfer.effectAllowed = 'copy'
-                          }}
-                          onClick={() => navigateFinder(windowItem.id, createVolumeSubRoute(activeVolumeMount, entry.path))}
-                          onContextMenu={(event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          }}
-                        >
-                          <strong>{entry.name}</strong>
-                          <span>Carpeta</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeVolumeFiles.length && viewMode === 'list' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Archivos</strong>
-                    {renderFinderListHeader('Tamaño')}
-                    <div className="finder-file-list">
-                      {activeVolumeFiles.map((entry) => (
-                        <button
-                          key={entry.path}
-                          type="button"
-                          className="finder-file-row interactive"
-                          draggable
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
-                            event.dataTransfer.effectAllowed = 'copy'
-                          }}
-                          onClick={() => void (async () => {
-                            if (isImageEntry(entry)) {
-                              openMediaWindow('photos', entry)
-                              return
-                            }
-                            if (isVideoEntry(entry)) {
-                              openMediaWindow('videos', entry)
-                              return
-                            }
-                            await openSystemPath(entry.path)
-                          })()}
-                          onContextMenu={(event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          }}
-                        >
-                          <strong>{entry.name}</strong>
-                          <span>{formatVolumeSize(entry.sizeBytes)}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                {activeVolumeFiles.length && viewMode === 'icons' ? (
-                  <div className="finder-entry-section">
-                    <strong className="finder-entry-title">Archivos</strong>
-                    <div className="finder-file-grid">
-                      {activeVolumeFiles.map((entry) =>
-                        renderFinderFileTile({
-                          keyId: entry.path,
-                          name: entry.name,
-                          subtitle: formatVolumeSize(entry.sizeBytes),
-                          sourcePath: entry.path,
-                          extension: entry.extension,
-                          iconSrc: entry.icon,
-                          draggable: true,
-                          onDragStart: (event) => {
-                            event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
-                            event.dataTransfer.effectAllowed = 'copy'
-                          },
-                          onClick: () => {
-                            void (async () => {
-                              if (isImageEntry(entry)) {
-                                openMediaWindow('photos', entry)
-                                return
-                              }
-                              if (isVideoEntry(entry)) {
-                                openMediaWindow('videos', entry)
-                                return
-                              }
-                              await openSystemPath(entry.path)
-                            })()
-                          },
-                          onContextMenu: (event) => {
-                            event.preventDefault()
-                            openContextMenuAt({
-                              type: 'volume-entry',
-                              label: entry.name,
-                              entry,
-                            }, event.clientX, event.clientY)
-                          },
-                        }),
-                      )}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
+              <FinderVolumePanel
+                title={activeVolume?.name ?? formatVolumeLabel(activeVolumeMount)}
+                subtitle={activeVolumePath ?? activeVolume?.mount ?? activeVolumeMount}
+                capacity={activeVolume?.totalGb}
+                free={activeVolume?.freeGb}
+                activeVolumeLoading={activeVolumeLoading}
+                activeVolumeEntriesLength={activeVolumeEntries.length}
+                activeVolumeFolders={activeVolumeFolders}
+                activeVolumeFiles={activeVolumeFiles}
+                viewMode={viewMode}
+                renderFinderListHeader={renderFinderListHeader}
+                renderFinderFileTile={renderFinderFileTile}
+                onEntryFocus={(entry) => updateQuickLookCandidate(createQuickLookTargetFromVolumeEntry(entry))}
+                onFolderOpen={(entry) => navigateFinder(windowItem.id, createVolumeSubRoute(activeVolumeMount, entry.path))}
+                onEntryOpen={(entry) => {
+                  void (async () => {
+                    if (isImageEntry(entry)) {
+                      openMediaWindow('photos', entry)
+                      return
+                    }
+                    if (isVideoEntry(entry)) {
+                      openMediaWindow('videos', entry)
+                      return
+                    }
+                      await openTrackedSystemPath(entry.path, entry.name, entry.icon ?? null)
+                  })()
+                }}
+                onEntryContextMenu={(event, entry) => {
+                  event.preventDefault()
+                  openContextMenuAt({
+                    type: 'volume-entry',
+                    label: entry.name,
+                    entry,
+                  }, event.clientX, event.clientY)
+                }}
+                onEntryDragStart={(event, entry) => {
+                  event.dataTransfer.setData('application/x-mactorno-volume-entry', serializeVolumeEntryPayload(entry))
+                  event.dataTransfer.effectAllowed = 'copy'
+                }}
+                progressiveStatus={renderProgressiveStatus(
+                  visibleVolumeEntries.length,
+                  activeVolumeMeta?.total ?? activeVolumeEntries.length,
+                  () => {
+                    if (!activeVolumePath) {
+                      return
+                    }
+                    void loadVolumeEntriesPage(activeVolumePath, { forceFullIcons: true })
+                    setVisibleEntryCountsByPath((current) => ({
+                      ...current,
+                      [activeVolumePath]: activeVolumeMeta?.total ?? activeVolumeEntries.length,
+                    }))
+                  },
+                )}
+              />
             ) : null}
           </div>
         </div>
@@ -5382,166 +6623,39 @@ function App() {
   }
 
   function renderAboutContent() {
-    return (
-      <div className="about-panel">
-        <span className="notes-chip about-chip">Acerca de este dispositivo</span>
-        {loadingSystem ? <p>Cargando informacion real del equipo...</p> : null}
-        {systemError ? <p>{systemError}</p> : null}
-        {deviceInfo ? (
-          <>
-            <h2>{deviceInfo.hostname}</h2>
-            <div className="info-grid">
-              <article><strong>SO</strong><span>{deviceInfo.osName}</span></article>
-              <article><strong>Release</strong><span>{deviceInfo.release}</span></article>
-              <article><strong>CPU</strong><span>{deviceInfo.cpuModel}</span></article>
-              <article><strong>RAM</strong><span>{deviceInfo.totalMemoryGb} GB</span></article>
-              <article><strong>Arquitectura</strong><span>{deviceInfo.arch}</span></article>
-              <article><strong>Uptime</strong><span>{deviceInfo.uptimeHours} horas</span></article>
-            </div>
-          </>
-        ) : null}
-      </div>
-    )
+    return <AboutPanel deviceInfo={deviceInfo} loadingSystem={loadingSystem} resolvedPerformanceProfile={resolvedPerformanceProfile} systemError={systemError} />
   }
 
   function renderLauncherContent() {
     return (
-      <div className="launcher-panel">
-        <h2>Aplicaciones del sistema</h2>
-        <p>{deviceInfo ? `Mostrando apps para ${deviceInfo.osName}` : 'Detectando sistema...'}</p>
-        <div className="apps-list launcher-grid">
-          {installedApps.slice(0, 40).map((app) => (
-            <button
-              key={app.id}
-              type="button"
-              className="app-row launch-card"
-              onClick={() => void launchSystemApp(app.launchTarget || app.target)}
-              draggable
-              onDragStart={(event) => {
-                event.dataTransfer.setData('application/json', JSON.stringify(app))
-                event.dataTransfer.effectAllowed = 'copy'
-              }}
-            >
-              <span className="app-row-main">
-                {renderInstalledAppIcon(app)}
-                <span className="app-row-copy">
-                  <strong>{app.name}</strong>
-                  <span>{app.source}</span>
-                </span>
-              </span>
-              <span className="pin-hint" onClick={(event) => {
-                event.stopPropagation()
-                pinInstalledAppToDock(app)
-              }}>Fijar al dock</span>
-            </button>
-          ))}
-        </div>
-      </div>
+      <LauncherPanel
+        deviceInfo={deviceInfo}
+        installedApps={installedApps}
+        visibleInstalledAppsCount={visibleInstalledAppsCount}
+        onLaunch={(app) => void launchInstalledSystemApp(app)}
+        onPin={pinInstalledAppToDock}
+        onShowAll={() => setVisibleInstalledAppsCount(installedApps.length)}
+        renderProgressiveStatus={renderProgressiveStatus}
+      />
     )
   }
 
   function renderLauncherPopup() {
     const filteredApps = installedApps
       .filter((app) => app.name.toLowerCase().includes(launcherSearch.trim().toLowerCase()))
-      .slice(0, 80)
-    const appsPerPage = 16
-    const totalLauncherPages = Math.max(1, Math.ceil(filteredApps.length / appsPerPage))
-    const currentLauncherPage = Math.min(launcherPage, totalLauncherPages - 1)
-    const pagedApps = filteredApps.slice(
-      currentLauncherPage * appsPerPage,
-      currentLauncherPage * appsPerPage + appsPerPage,
-    )
-
     return (
-      <AnimatePresence>
-        {launcherOpen ? (
-          <div
-            ref={launcherPanelRef}
-          >
-            <div className="launchpad-shell">
-              <motion.div
-                className="launchpad-panel"
-                initial={{ opacity: 0, y: 18, scale: 0.985 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 12, scale: 0.99 }}
-                transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-              >
-                <div className="launchpad-search-wrap">
-                  <input
-                    className="launchpad-search"
-                    value={launcherSearch}
-                    onChange={(event) => {
-                      setLauncherSearch(event.target.value)
-                      setLauncherPage(0)
-                    }}
-                    placeholder="Buscar apps"
-                  />
-                </div>
-                {loadingSystem ? <p className="launchpad-empty">Buscando aplicaciones del dispositivo...</p> : null}
-                {!loadingSystem && systemError ? <p className="launchpad-empty">{systemError}</p> : null}
-                {!loadingSystem && !systemError && filteredApps.length === 0 ? (
-                  <p className="launchpad-empty">No se encontraron aplicaciones para este sistema.</p>
-                ) : null}
-                {filteredApps.length > 0 ? (
-                  <div className="launchpad-pages">
-                    {totalLauncherPages > 1 ? (
-                      <button
-                        type="button"
-                        className="launchpad-nav launchpad-nav-prev"
-                        onClick={() => setLauncherPage((current) => Math.max(0, current - 1))}
-                        disabled={currentLauncherPage === 0}
-                        aria-label="Pagina anterior"
-                      >
-                        ‹
-                      </button>
-                    ) : null}
-                    <div className="launchpad-grid">
-                      {pagedApps.map((app) => (
-                        <button
-                          key={app.id}
-                          type="button"
-                          className="launchpad-app"
-                          onClick={() => void launchSystemApp(app.launchTarget || app.target)}
-                          draggable
-                          onDragStart={(event) => {
-                            event.dataTransfer.setData('application/json', JSON.stringify(app))
-                            event.dataTransfer.effectAllowed = 'copy'
-                          }}
-                        >
-                          <span className="launchpad-app-icon">{getAppLauncherIcon(app)}</span>
-                          <strong>{app.name}</strong>
-                          <span>{app.source}</span>
-                        </button>
-                      ))}
-                    </div>
-                    {totalLauncherPages > 1 ? (
-                      <button
-                        type="button"
-                        className="launchpad-nav launchpad-nav-next"
-                        onClick={() => setLauncherPage((current) => Math.min(totalLauncherPages - 1, current + 1))}
-                        disabled={currentLauncherPage >= totalLauncherPages - 1}
-                        aria-label="Pagina siguiente"
-                      >
-                        ›
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-                {filteredApps.length > 0 && totalLauncherPages > 1 ? (
-                  <div className="launchpad-pagination" aria-label="Paginas del lanzador">
-                    {Array.from({ length: totalLauncherPages }, (_, index) => (
-                      <span
-                        key={`launchpad-page-${index}`}
-                        className={`launchpad-page-dot${index === currentLauncherPage ? ' active' : ''}`}
-                      />
-                    ))}
-                  </div>
-                ) : null}
-              </motion.div>
-            </div>
-          </div>
-        ) : null}
-      </AnimatePresence>
+      <LauncherPopup
+        filteredApps={filteredApps}
+        launcherOpen={launcherOpen}
+        launcherPage={launcherPage}
+        launcherSearch={launcherSearch}
+        loadingSystem={loadingSystem}
+        panelRef={launcherPanelRef}
+        setLauncherPage={setLauncherPage}
+        setLauncherSearch={setLauncherSearch}
+        systemError={systemError}
+        onLaunch={(app) => void launchInstalledSystemApp(app)}
+      />
     )
   }
 
@@ -5602,151 +6716,19 @@ function App() {
   }
 
   function renderDisplayContent() {
-    const systemWallpaperChoices = (deviceInfo?.systemWallpapers ?? []).map(
-      (wallpaper) =>
-        ({
-          kind: 'system',
-          value: wallpaper.path,
-          name: wallpaper.name,
-        }) satisfies WallpaperSelection,
-    )
-
-    function renderWallpaperSection(
-      title: string,
-      description: string,
-      selection: WallpaperSelection,
-      onChange: (next: WallpaperSelection) => void,
-      uploadLabel: string,
-    ) {
-      const uploadId = `wallpaper-upload-${title.toLowerCase().replace(/\s+/g, '-')}`
-
-      return (
-        <section className="display-card">
-          <div className="display-card-head">
-            <div>
-              <strong>{title}</strong>
-              <p>{description}</p>
-            </div>
-            <label className="file-pill wallpaper-upload-pill" htmlFor={uploadId}>
-              {uploadLabel}
-              <input
-                id={uploadId}
-                type="file"
-                accept="image/*"
-                onChange={(event) => {
-                  const file = event.target.files?.[0]
-                  if (!file) {
-                    return
-                  }
-                  readWallpaperFile(file, onChange)
-                  event.currentTarget.value = ''
-                }}
-              />
-            </label>
-          </div>
-
-          <div className="wallpaper-grid">
-            {(title === 'Fondo de inicio' ? [DEFAULT_LOGIN_WALLPAPER] : []).map((choice) => {
-              const preview = getWallpaperPreviewSource(choice)
-              return (
-                <button
-                  key={`${choice.kind}-${choice.value}`}
-                  type="button"
-                  className={`wallpaper-preset${isWallpaperSelectionActive(selection, choice) ? ' active' : ''}`}
-                  onClick={() => onChange(choice)}
-                >
-                  <span
-                    className="wallpaper-swatch"
-                    style={
-                      preview.type === 'gradient'
-                        ? { background: preview.value }
-                        : { backgroundImage: `url("${preview.value}")` }
-                    }
-                  />
-                  <strong>{preview.label}</strong>
-                </button>
-              )
-            })}
-            {WALLPAPER_PRESETS.map((preset) => {
-              const choice: WallpaperSelection = { kind: 'preset', value: preset.id }
-              return (
-                <button
-                  key={preset.id}
-                  type="button"
-                  className={`wallpaper-preset${isWallpaperSelectionActive(selection, choice) ? ' active' : ''}`}
-                  onClick={() => onChange(choice)}
-                >
-                  <span className="wallpaper-swatch" style={{ background: preset.background }} />
-                  <strong>{preset.name}</strong>
-                </button>
-              )
-            })}
-            {selection.kind === 'upload' ? (
-              <button type="button" className="wallpaper-preset active" onClick={() => onChange(selection)}>
-                <span className="wallpaper-swatch" style={{ backgroundImage: `url("${selection.value}")` }} />
-                <strong>{selection.name}</strong>
-              </button>
-            ) : null}
-            {systemWallpaperChoices.map((choice) => {
-              const preview = getWallpaperPreviewSource(choice)
-              return (
-                <button
-                  key={`${choice.kind}-${choice.value}`}
-                  type="button"
-                  className={`wallpaper-preset${isWallpaperSelectionActive(selection, choice) ? ' active' : ''}`}
-                  onClick={() => onChange(choice)}
-                >
-                  <span className="wallpaper-swatch" style={{ backgroundImage: `url("${preview.value}")` }} />
-                  <strong>{choice.name}</strong>
-                </button>
-              )
-            })}
-          </div>
-        </section>
-      )
-    }
-
     return (
-      <div className="display-preferences">
-        <section className="display-card">
-          <div>
-            <strong>Apariencia</strong>
-            <p>Elige si quieres mantener el look actual o usar modo oscuro.</p>
-          </div>
-          <div className="appearance-toggle">
-            <button
-              type="button"
-              className={appearanceMode === 'classic' ? 'active' : ''}
-              onClick={() => setAppearanceMode('classic')}
-            >
-              Claro actual
-            </button>
-            <button
-              type="button"
-              className={appearanceMode === 'dark' ? 'active' : ''}
-              onClick={() => setAppearanceMode('dark')}
-            >
-              Oscuro
-            </button>
-          </div>
-        </section>
-
-        {renderWallpaperSection(
-          'Fondo de escritorio',
-          'Elige presets, sube una foto o usa un wallpaper detectado del sistema real.',
-          desktopWallpaper,
-          setDesktopWallpaper,
-          'Subir al escritorio',
-        )}
-
-        {renderWallpaperSection(
-          'Fondo de inicio',
-          'Configura por separado la pantalla de ingreso de Mactorno.',
-          loginWallpaper,
-          setLoginWallpaper,
-          'Subir al inicio',
-        )}
-      </div>
+      <DisplayPanel
+        appearanceMode={appearanceMode}
+        desktopWallpaper={desktopWallpaper}
+        loginWallpaper={loginWallpaper}
+        performanceMode={performanceMode}
+        resolvedPerformanceProfile={resolvedPerformanceProfile}
+        setAppearanceMode={setAppearanceMode}
+        setDesktopWallpaper={setDesktopWallpaper}
+        setLoginWallpaper={setLoginWallpaper}
+        setPerformanceMode={setPerformanceMode}
+        systemWallpapers={deviceInfo?.systemWallpapers ?? []}
+      />
     )
   }
 
@@ -5760,6 +6742,327 @@ function App() {
 
     setNotes((current) => [nextNote, ...current])
     setSelectedNoteId(nextNote.id)
+    rememberRecent({
+      key: `note:${nextNote.id}`,
+      kind: 'note',
+      title: nextNote.title,
+      subtitle: 'Nota recien creada',
+      noteId: nextNote.id,
+      icon: { kind: 'glyph', value: '📝' },
+    })
+    pushToast('Nueva nota', 'La nota ya esta lista para editar.')
+  }
+
+  function activateSpotlightResult(result: (typeof spotlightResults)[number]) {
+    setSpotlightOpen(false)
+
+    switch (result.kind) {
+      case 'app':
+        if (result.appId) {
+          openApp(result.appId)
+        }
+        return
+      case 'installed-app':
+        if (result.app) {
+          void launchInstalledSystemApp(result.app)
+        }
+        return
+      case 'note':
+        if (result.noteId) {
+          setSelectedNoteId(result.noteId)
+          openApp('notes')
+        }
+        return
+      case 'document':
+        if (result.itemId) {
+          openDesktopDocument(result.itemId)
+        }
+        return
+      case 'volume':
+        if (result.mount) {
+          openDesktopVolume(result.mount)
+        }
+        return
+      case 'route':
+        if (result.route) {
+          openOrFocusFinderRoute(result.route)
+        }
+        return
+      case 'path':
+        if (result.path) {
+          void openTrackedSystemPath(result.path, result.title, result.icon?.kind === 'image' ? result.icon.value : null)
+        }
+        return
+      case 'action':
+        switch (result.actionId) {
+          case 'new-note':
+            createNote()
+            openApp('notes')
+            return
+          case 'open-apps':
+            openOrFocusFinderRoute('applications')
+            return
+          case 'open-dock':
+            openOrFocusFinderRoute('dock')
+            return
+          case 'open-device':
+            openOrFocusFinderRoute('device')
+            return
+          case 'toggle-dark':
+            setAppearanceMode('dark')
+            return
+          case 'toggle-light':
+            setAppearanceMode('classic')
+            return
+        }
+    }
+  }
+
+  function renderQuickLook() {
+    return (
+      <AnimatePresence>
+        {quickLookTarget ? (
+          <div className="quick-look-backdrop" onMouseDown={closeQuickLook}>
+            <motion.div
+              className="quick-look-panel"
+              initial={{ opacity: 0, y: 14, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.985 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="quick-look-head">
+                <div className="quick-look-copy">
+                  <strong>{quickLookTarget.name}</strong>
+                  <span>{quickLookTarget.subtitle}</span>
+                </div>
+                <span className="quick-look-hint">Barra espaciadora · Esc</span>
+              </div>
+              <div className="quick-look-body">
+                {quickLookTarget.kind === 'image' && quickLookTarget.path ? (
+                  <PhotoViewer src={getMediaSource(quickLookTarget.path)} alt={quickLookTarget.name} />
+                ) : null}
+                {quickLookTarget.kind === 'video' && quickLookTarget.path ? (
+                  <VideoPlayer src={getMediaSource(quickLookTarget.path)} />
+                ) : null}
+                {quickLookTarget.kind === 'text' ? (
+                  <article className="quick-look-document">
+                    <img
+                      className="quick-look-document-icon"
+                      src={quickLookTarget.iconSrc ?? resolvePublicAssetPath('/texto.png')}
+                      alt=""
+                      draggable={false}
+                    />
+                    <pre>{quickLookTarget.textContent?.trim() || 'Documento vacio.'}</pre>
+                  </article>
+                ) : null}
+                {quickLookTarget.kind === 'folder' ? (
+                  <article className="quick-look-generic">
+                    <img
+                      className="quick-look-generic-icon folder"
+                      src={quickLookTarget.iconSrc ?? resolvePublicAssetPath('/carp.png')}
+                      alt=""
+                      draggable={false}
+                    />
+                    <div className="quick-look-generic-copy">
+                      <strong>{quickLookTarget.name}</strong>
+                      <span>Carpeta lista para abrir o importar.</span>
+                    </div>
+                  </article>
+                ) : null}
+                {quickLookTarget.kind === 'file' ? (
+                  <article className="quick-look-generic">
+                    <img
+                      className="quick-look-generic-icon"
+                      src={quickLookTarget.iconSrc ?? getDocumentPreviewIcon(quickLookTarget.name, quickLookTarget.extension || '')}
+                      alt=""
+                      draggable={false}
+                    />
+                    <div className="quick-look-generic-copy">
+                      <strong>{quickLookTarget.name}</strong>
+                      <span>Vista rapida disponible para archivos, imagenes, videos y documentos de texto.</span>
+                    </div>
+                  </article>
+                ) : null}
+              </div>
+              <div className="quick-look-meta">
+                <span>{quickLookTarget.location ?? 'Mactorno'}</span>
+              </div>
+            </motion.div>
+          </div>
+        ) : null}
+      </AnimatePresence>
+    )
+  }
+
+  function renderMissionControl() {
+    return (
+      <AnimatePresence>
+        {missionControlState.open && missionControlCandidates.length > 0 ? (
+          <div className="mission-control-overlay" onMouseDown={closeMissionControl}>
+            <motion.div
+              className="mission-control-panel"
+              initial={{ opacity: 0, y: 16, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 12, scale: 0.985 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="mission-control-head">
+                <div className="mission-control-copy">
+                  <strong>Mission Control</strong>
+                  <span>{missionControlCandidates.length} ventanas visibles</span>
+                </div>
+                <span className="mission-control-hint">F3 · Ctrl/Cmd + ↑ · Enter</span>
+              </div>
+              <div className="mission-control-grid">
+                {missionControlCandidates.map((item, index) => {
+                  const app = getResolvedApp(item.appId)
+                  const isSelected = missionControlState.selectedIndex === index
+                  const title = getWindowDisplayTitle(item)
+
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      className={`mission-control-card${isSelected ? ' active' : ''}`}
+                      onMouseEnter={() => setMissionControlState((current) => ({ ...current, selectedIndex: index }))}
+                      onFocus={() => setMissionControlState((current) => ({ ...current, selectedIndex: index }))}
+                      onClick={() => activateMissionControlSelection(index)}
+                    >
+                      <div className="mission-control-preview">
+                        <div className="mission-control-preview-toolbar">
+                          <span className="mission-control-preview-dots" aria-hidden="true">
+                            <i />
+                            <i />
+                            <i />
+                          </span>
+                          <span>{app.name}</span>
+                        </div>
+                        <div className={`mission-control-preview-body preview-${item.appId}`}>
+                          <div className="mission-control-preview-icon" style={{ background: app.accent }}>
+                            {renderDockIconContent(app.iconSpec)}
+                          </div>
+                          <strong>{title}</strong>
+                          <span>{item.appId === 'finder' ? 'Explorador activo' : 'Ventana lista para activar'}</span>
+                        </div>
+                      </div>
+                      <div className="mission-control-card-copy">
+                        <strong>{app.name}</strong>
+                        <span>{title}</span>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            </motion.div>
+          </div>
+        ) : null}
+      </AnimatePresence>
+    )
+  }
+
+  function renderSpotlight() {
+    return (
+      <AnimatePresence>
+        {spotlightOpen ? (
+          <div className="spotlight-backdrop" onMouseDown={() => setSpotlightOpen(false)}>
+            <motion.div
+              ref={spotlightPanelRef}
+              className="spotlight-panel"
+              initial={{ opacity: 0, y: -22, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -12, scale: 0.985 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              <div className="spotlight-head">
+                <span className="spotlight-chip">Spotlight</span>
+                <span className="spotlight-hint">Ctrl/Cmd + Space</span>
+              </div>
+              <input
+                ref={spotlightInputRef}
+                className="spotlight-input"
+                value={spotlightQuery}
+                onChange={(event) => {
+                  setSpotlightQuery(event.target.value)
+                  setSpotlightSelectionIndex(0)
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    setSpotlightSelectionIndex((current) => Math.min(spotlightResults.length - 1, current + 1))
+                    return
+                  }
+
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    setSpotlightSelectionIndex((current) => Math.max(0, current - 1))
+                    return
+                  }
+
+                  if (event.key === 'Enter') {
+                    event.preventDefault()
+                    const selected = spotlightResults[spotlightSelectionIndex] ?? spotlightResults[0]
+                    if (selected) {
+                      activateSpotlightResult(selected)
+                    }
+                  }
+                }}
+                placeholder="Buscar apps, notas, discos o acciones"
+              />
+              <div className="spotlight-results">
+                {spotlightResults.length ? (
+                  spotlightResults.map((result, index) => (
+                    <button
+                      key={result.id}
+                      type="button"
+                      className={`spotlight-result${index === spotlightSelectionIndex ? ' active' : ''}`}
+                      onMouseEnter={() => setSpotlightSelectionIndex(index)}
+                      onClick={() => activateSpotlightResult(result)}
+                    >
+                      <span className="spotlight-result-icon">
+                        {result.kind === 'installed-app' && result.app
+                          ? renderInstalledAppIcon(result.app, 'icon-preview-chip small')
+                          : result.icon
+                            ? <span className="icon-preview-chip small">{renderDockIconContent(result.icon)}</span>
+                            : <span className="icon-preview-chip small">{result.title[0] ?? '?'}</span>}
+                      </span>
+                      <span className="spotlight-result-copy">
+                        <strong>{result.title}</strong>
+                        <span>{result.subtitle}</span>
+                      </span>
+                      <span className="spotlight-result-kind">
+                        {result.kind === 'installed-app'
+                          ? 'Sistema'
+                          : result.kind === 'app'
+                            ? 'Integrada'
+                          : result.kind === 'note'
+                              ? 'Nota'
+                              : result.kind === 'document'
+                                ? 'Documento'
+                                : result.kind === 'path'
+                                  ? 'Archivo'
+                                : result.kind === 'volume'
+                                  ? 'Disco'
+                                  : result.kind === 'route'
+                                    ? 'Finder'
+                                    : 'Accion'}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="spotlight-empty">
+                    <strong>Sin resultados</strong>
+                    <span>Prueba con el nombre de una app, nota, volumen o accion del sistema.</span>
+                  </div>
+                )}
+              </div>
+            </motion.div>
+          </div>
+        ) : null}
+      </AnimatePresence>
+    )
   }
 
   function updateNote(noteId: string, patch: Partial<Pick<NoteItem, 'title' | 'body'>>) {
@@ -5780,6 +7083,27 @@ function App() {
 
   function deleteNote(noteId: string) {
     setNotes((current) => current.filter((note) => note.id !== noteId))
+  }
+
+  function requestDeleteNote(noteId: string) {
+    const target = notes.find((note) => note.id === noteId)
+    if (!target) {
+      return
+    }
+
+    openSystemDialog(
+      {
+        title: 'Eliminar nota',
+        message: `La nota "${target.title || 'Sin titulo'}" se quitara de la biblioteca local.`,
+        confirmLabel: 'Eliminar',
+        cancelLabel: 'Cancelar',
+        tone: 'danger',
+      },
+      () => {
+        deleteNote(noteId)
+        pushToast('Nota eliminada', target.title || 'Sin titulo')
+      },
+    )
   }
 
   function renderNotesContent() {
@@ -5808,7 +7132,7 @@ function App() {
           {activeNote ? (
             <>
               <div className="notes-editor-actions">
-                <button type="button" onClick={() => deleteNote(activeNote.id)}>Eliminar</button>
+                <button type="button" onClick={() => requestDeleteNote(activeNote.id)}>Eliminar</button>
               </div>
               <input
                 className="notes-title-input"
@@ -5863,7 +7187,104 @@ function App() {
     )
   }
 
+  function renderSystemDialog() {
+    return (
+      <AnimatePresence>
+        {systemDialog ? (
+          <motion.div
+            className="system-dialog-backdrop"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+          >
+            <motion.div
+              className={`system-dialog-panel${systemDialog.tone === 'danger' ? ' danger' : ''}`}
+              initial={{ opacity: 0, y: 18, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="system-dialog-copy">
+                <strong>{systemDialog.title}</strong>
+                <p>{systemDialog.message}</p>
+              </div>
+              <div className="system-dialog-actions">
+                {systemDialog.cancelLabel ? (
+                  <button type="button" className="secondary" onClick={closeSystemDialog}>
+                    {systemDialog.cancelLabel}
+                  </button>
+                ) : null}
+                <button type="button" className={systemDialog.tone === 'danger' ? 'danger' : ''} onClick={confirmSystemDialog}>
+                  {systemDialog.confirmLabel}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    )
+  }
+
+  function renderWifiIcon() {
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M2.2 6.1a9.5 9.5 0 0 1 11.6 0" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M4.4 8.6a6.1 6.1 0 0 1 7.2 0" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <path d="M6.6 11.1a2.8 2.8 0 0 1 2.8 0" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        <circle cx="8" cy="13" r="1.1" fill="currentColor" />
+      </svg>
+    )
+  }
+
+  function renderBluetoothIcon() {
+    return (
+      <svg viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M7.3 1.8v12.4l4.9-4.2-3.5-2 3.5-2.1-4.9-4.1Z" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" strokeLinecap="round" />
+        <path d="M3.7 4.7 8.6 8l-4.9 3.3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    )
+  }
+
+  function renderStatusMenu(kind: 'wifi' | 'bluetooth') {
+    const isWifi = kind === 'wifi'
+    return (
+      <div className="app-menu-dropdown menu-status-dropdown">
+        <div className="menu-status-header">
+          <strong>{isWifi ? 'Wi-Fi' : 'Bluetooth'}</strong>
+          <span>{isWifi ? (networkOnline ? 'Activo' : 'Sin conexion') : (bluetoothSupported ? 'Disponible' : 'No disponible')}</span>
+        </div>
+        <div className="menu-status-section">
+          <strong>{isWifi ? 'Estado actual' : 'Este equipo'}</strong>
+          <span>{isWifi ? wifiStatusSummary : bluetoothStatusSummary}</span>
+        </div>
+        {isWifi ? (
+          <div className="menu-status-section">
+            <strong>Conexion</strong>
+            <span>{networkOnline ? 'Internet disponible para apps y Finder.' : 'La red esta desconectada o en modo offline.'}</span>
+          </div>
+        ) : (
+          <div className="menu-status-section">
+            <strong>Dispositivos</strong>
+            <span>{bluetoothSupported ? 'Sin dispositivos reportados en esta sesion.' : 'Tu navegador o entorno no expone Bluetooth.'}</span>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setStatusMenuOpen(null)
+            setControlCenterOpen(true)
+          }}
+        >
+          Abrir centro de control
+        </button>
+      </div>
+    )
+  }
+
   function renderControlCenter() {
+    const recentNotifications = notificationHistory.slice(0, 6)
+    const recentEntries = recentItems.slice(0, 6)
+
     return (
       <AnimatePresence>
         {controlCenterOpen ? (
@@ -5875,14 +7296,26 @@ function App() {
             exit={{ opacity: 0, y: -8, scale: 0.98 }}
             transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
           >
-            <div className="control-card-grid">
-              <button type="button" className="control-card">
+            <div className="control-center-section">
+              <div className="control-center-section-head">
+                <strong>Conectividad</strong>
+              </div>
+              <div className="control-card-grid">
+              <button type="button" className="control-card" onClick={() => {
+                setControlCenterOpen(false)
+                setStatusMenuOpen('wifi')
+              }}>
                 <span className="control-pill-icon">Wi</span>
                 <strong>Wi-Fi</strong>
+                <span className="control-note">{wifiStatusSummary}</span>
               </button>
-              <button type="button" className="control-card">
+              <button type="button" className="control-card" onClick={() => {
+                setControlCenterOpen(false)
+                setStatusMenuOpen('bluetooth')
+              }}>
                 <span className="control-pill-icon">Bt</span>
                 <strong>Bluetooth</strong>
+                <span className="control-note">{bluetoothSupported ? 'Disponible' : 'No detectado'}</span>
               </button>
               <button type="button" className="control-card">
                 <span className="control-pill-icon">DnD</span>
@@ -5900,8 +7333,13 @@ function App() {
                 <strong>Pantalla</strong>
               </button>
             </div>
+            </div>
 
-            <div className="control-slider-card">
+            <div className="control-center-section">
+              <div className="control-center-section-head">
+                <strong>Controles</strong>
+              </div>
+              <div className="control-slider-card">
               <div className="control-slider-head">
                 <strong>Brillo</strong>
                 <span>{systemControls.brightness}%</span>
@@ -5942,6 +7380,73 @@ function App() {
               />
               {!systemControls.supportsVolume ? <span className="control-note">No disponible en este equipo.</span> : null}
             </div>
+            </div>
+
+            <div className="control-center-section">
+              <div className="control-center-section-head">
+                <strong>Centro de notificaciones</strong>
+              </div>
+              <div className="control-list-card">
+              <div className="control-list-head">
+                <strong>Notificaciones</strong>
+                {notificationHistory.length ? (
+                  <button type="button" onClick={clearNotificationHistory}>Limpiar</button>
+                ) : null}
+              </div>
+              <div className="control-list-body">
+                {recentNotifications.length ? recentNotifications.map((item) => (
+                  <div key={item.id} className={`control-list-item static${item.read ? '' : ' unread'}`}>
+                    <span className="control-list-icon">•</span>
+                    <span className="control-list-copy">
+                      <strong>{item.title}</strong>
+                      <span>
+                        {item.detail || 'Notificacion del sistema'} · {new Date(item.createdAt).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </span>
+                  </div>
+                )) : (
+                  <div className="control-list-empty">
+                    <strong>Sin historial</strong>
+                    <span>Las alertas recientes del sistema apareceran aqui.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="control-list-card">
+              <div className="control-list-head">
+                <strong>Recientes</strong>
+                <span>{recentItems.length ? `${Math.min(recentItems.length, 6)} visibles` : 'Sin uso reciente'}</span>
+              </div>
+              <div className="control-list-body">
+                {recentEntries.length ? recentEntries.map((item) => (
+                  <button key={item.id} type="button" className="control-list-item" onClick={() => activateRecentItem(item)}>
+                    <span className="control-list-icon">
+                      {item.kind === 'installed-app'
+                        ? (() => {
+                            const installedApp = installedApps.find((entry) => entry.id === item.installedAppId)
+                            return installedApp
+                              ? renderInstalledAppIcon(installedApp, 'icon-preview-chip small')
+                              : <span className="icon-preview-chip small">{item.title[0] ?? '?'}</span>
+                          })()
+                        : item.icon
+                          ? <span className="icon-preview-chip small">{renderDockIconContent(item.icon)}</span>
+                          : <span className="icon-preview-chip small">{item.title[0] ?? '?'}</span>}
+                    </span>
+                    <span className="control-list-copy">
+                      <strong>{item.title}</strong>
+                      <span>{item.subtitle}</span>
+                    </span>
+                  </button>
+                )) : (
+                  <div className="control-list-empty">
+                    <strong>Sin elementos recientes</strong>
+                    <span>Las apps, archivos y carpetas que abras se iran acumulando aqui.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
@@ -5954,14 +7459,61 @@ function App() {
       return null
     }
 
-    const currentUrl = browserState.history[browserState.historyIndex]
-    const canGoBack = browserState.historyIndex > 0
-    const canGoForward = browserState.historyIndex < browserState.history.length - 1
+    const activeTab = getActiveBrowserTab(browserState)
+    if (!activeTab) {
+      return null
+    }
+
+    const currentUrl = activeTab.history[activeTab.historyIndex]
+    const isActiveHeavyWindow = !initialLowEndDevice || activeWindow?.id === windowItem.id
+    const canGoBack = activeTab.historyIndex > 0
+    const canGoForward = activeTab.historyIndex < activeTab.history.length - 1
     const isHome = isSafariHomeUrl(currentUrl)
-    const isBlocked = isBlockedEmbeddedPage(browserState.lastError)
+    const isBlocked = isBlockedEmbeddedPage(activeTab.lastError)
 
     return (
       <div className={`browser-view chrome-view${windowItem.appId === 'safari' ? ' browser-inline-toolbar' : ''}`}>
+        {windowItem.appId === 'safari' ? (
+          <div className="browser-tab-strip">
+            <div className="browser-tab-list">
+              {browserState.tabs.map((tab) => {
+                const tabUrl = tab.history[tab.historyIndex] ?? SAFARI_HOME_URL
+                const tabLabel = tab.title.trim()
+                  || (isSafariHomeUrl(tabUrl) ? 'Pagina de inicio' : getPathLeaf(tabUrl.replace(/^https?:\/\//i, '')) || 'Nueva pestana')
+
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    className={`browser-tab-chip${tab.id === browserState.activeTabId ? ' active' : ''}`}
+                    onClick={() => selectBrowserTab(windowItem.id, tab.id)}
+                  >
+                    <span>{tabLabel}</span>
+                    <i
+                      role="button"
+                      aria-label={`Cerrar pestana ${tabLabel}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        closeBrowserTab(windowItem.id, tab.id)
+                      }}
+                    >
+                      ×
+                    </i>
+                  </button>
+                )
+              })}
+            </div>
+            <button
+              type="button"
+              className="browser-tab-add"
+              onClick={() => openBrowserTab(windowItem.id)}
+              aria-label="Nueva pestana"
+              title="Nueva pestana"
+            >
+              +
+            </button>
+          </div>
+        ) : null}
         <div className="browser-controls">
           <div className="browser-actions">
             <button
@@ -5989,14 +7541,14 @@ function App() {
             className="browser-address-form"
             onSubmit={(event) => {
               event.preventDefault()
-              commitBrowserNavigation(windowItem.id, browserState.inputValue)
+              commitBrowserNavigation(windowItem.id, activeTab.inputValue)
             }}
           >
             <span className="browser-address-icon" aria-hidden="true">⌕</span>
-            {browserState.progress > 0 ? <span className="browser-loading-spinner" aria-hidden="true" /> : null}
+            {activeTab.progress > 0 ? <span className="browser-loading-spinner" aria-hidden="true" /> : null}
             <input
               className="browser-address-input"
-              value={browserState.inputValue}
+              value={activeTab.inputValue}
               onChange={(event) => setBrowserInput(windowItem.id, event.target.value)}
               placeholder="Buscar o escribir una URL"
             />
@@ -6004,37 +7556,28 @@ function App() {
           <div className="browser-actions browser-actions-end">
             <button
               type="button"
-              className="browser-icon-button"
-              onClick={() => openSafariWindow()}
-              aria-label="Nueva ventana"
-              title="Nueva ventana"
-            >
-              +
-            </button>
-            <button
-              type="button"
-              className={`browser-icon-button${browserState.progress > 0 ? ' is-loading' : ''}`}
+              className={`browser-icon-button${activeTab.progress > 0 ? ' is-loading' : ''}`}
               onClick={() => reloadBrowser(windowItem.id)}
-              aria-label={browserState.progress > 0 ? 'Cargando pagina' : 'Recargar'}
-              title={browserState.progress > 0 ? 'Cargando pagina' : 'Recargar'}
+              aria-label={activeTab.progress > 0 ? 'Cargando pagina' : 'Recargar'}
+              title={activeTab.progress > 0 ? 'Cargando pagina' : 'Recargar'}
             >
               ↻
             </button>
           </div>
         </div>
         <div className="browser-page browser-page-live">
-          {browserState.progress > 0 && !isHome ? (
+          {activeTab.progress > 0 && !isHome ? (
             <div className="browser-progress" aria-hidden="true">
               <span
-                className={`browser-progress-bar${!browserState.loading && browserState.lastError ? ' error' : ''}`}
-                style={{ width: `${browserState.progress}%` }}
+                className={`browser-progress-bar${!activeTab.loading && activeTab.lastError ? ' error' : ''}`}
+                style={{ width: `${activeTab.progress}%` }}
               />
             </div>
           ) : null}
-          {!isHome && (browserState.loading || browserState.lastError) ? (
+          {!isHome && (activeTab.loading || activeTab.lastError) ? (
             <div className="browser-meta">
-              {browserState.loading ? <span>Cargando pagina...</span> : null}
-              {browserState.lastError ? <span className="browser-error">{browserState.lastError}</span> : null}
+              {activeTab.loading ? <span>Cargando pagina...</span> : null}
+              {activeTab.lastError ? <span className="browser-error">{activeTab.lastError}</span> : null}
               {isBlocked ? (
                 <button type="button" onClick={() => openBrowserExternally(currentUrl)}>
                   Abrir en navegador externo
@@ -6049,19 +7592,40 @@ function App() {
                   <span>Mac</span>
                   <span>torno</span>
                 </h1>
-                <p>Una portada inspirada en Google para tu navegador del escritorio.</p>
+                <p>Una portada inspirada en Safari con favoritos y busqueda rapida.</p>
+              </div>
+
+              <div className="safari-favorites">
+                {[
+                  { label: 'Apple', value: 'apple.com', glyph: '' },
+                  { label: 'Google', value: 'google.com', glyph: 'G' },
+                  { label: 'YouTube', value: 'youtube.com', glyph: '▶' },
+                  { label: 'Wikipedia', value: 'wikipedia.org', glyph: 'W' },
+                  { label: 'GitHub', value: 'github.com', glyph: 'GH' },
+                  { label: 'Coffeewaffles', value: 'coffeewaffles.cl', glyph: 'CW' },
+                ].map((favorite) => (
+                  <button
+                    key={favorite.value}
+                    type="button"
+                    className="safari-favorite-tile"
+                    onClick={() => commitBrowserNavigation(windowItem.id, favorite.value)}
+                  >
+                    <span className="safari-favorite-icon">{favorite.glyph}</span>
+                    <strong>{favorite.label}</strong>
+                  </button>
+                ))}
               </div>
 
               <form
                 className="mactorno-search"
                 onSubmit={(event) => {
                   event.preventDefault()
-                  commitBrowserNavigation(windowItem.id, browserState.inputValue)
+                  commitBrowserNavigation(windowItem.id, activeTab.inputValue)
                 }}
               >
                 <input
                   className="mactorno-search-input"
-                  value={browserState.inputValue === SAFARI_HOME_URL ? '' : browserState.inputValue}
+                  value={activeTab.inputValue === SAFARI_HOME_URL ? '' : activeTab.inputValue}
                   onChange={(event) => setBrowserInput(windowItem.id, event.target.value)}
                   placeholder="Buscar en la web o escribir una URL"
                 />
@@ -6075,6 +7639,24 @@ function App() {
                   </button>
                 </div>
               </form>
+
+              <div className="safari-privacy-card">
+                <strong>Informe de privacidad</strong>
+                <span>Mactorno intenta bloquear rastreadores basicos y mantener una experiencia limpia en la pagina inicial.</span>
+              </div>
+            </div>
+          ) : !isActiveHeavyWindow ? (
+            <div className="media-empty-state">
+              <strong>Navegador en pausa</strong>
+              <p>En equipos lentos solo la ventana activa mantiene el contenido web montado.</p>
+              <div className="media-actions">
+                <button type="button" onClick={() => focusWindow(windowItem.id)}>
+                  Activar ventana
+                </button>
+                <button type="button" onClick={() => openBrowserExternally(currentUrl)}>
+                  Abrir externo
+                </button>
+              </div>
             </div>
           ) : isElectronDesktop ? (
             <>
@@ -6088,7 +7670,7 @@ function App() {
           ) : (
             <>
               <iframe
-                key={`${currentUrl}-${browserState.reloadKey}`}
+                key={`${currentUrl}-${activeTab.reloadKey}`}
                 className="browser-frame"
                 src={currentUrl}
                 title={`Navegador ${windowItem.id}`}
@@ -6104,6 +7686,7 @@ function App() {
   function renderPhotoContent(windowItem: WindowState) {
     const mediaPath = windowItem.mediaPath
     const photoView = getPhotoViewState(windowItem.id)
+    const isActiveHeavyWindow = !initialLowEndDevice || activeWindow?.id === windowItem.id
     if (!mediaPath) {
       return (
         <div className="media-view photo-view">
@@ -6130,18 +7713,30 @@ function App() {
             <button type="button" onClick={() => void revealSystemPath(mediaPath)}>
               Mostrar en carpeta
             </button>
-            <button type="button" onClick={() => void openSystemPath(mediaPath)}>
+            <button type="button" onClick={() => void openTrackedSystemPath(mediaPath, windowItem.title)}>
               Abrir con el sistema
             </button>
           </div>
           <span className="media-path">{`${Math.round(photoView.zoom * 100)}% · ${photoView.rotation}° · ${mediaPath}`}</span>
         </div>
-        <PhotoViewer
-          src={getMediaSource(mediaPath)}
-          alt={windowItem.title}
-          zoom={photoView.zoom}
-          rotation={photoView.rotation}
-        />
+        {isActiveHeavyWindow ? (
+          <PhotoViewer
+            src={getMediaSource(mediaPath)}
+            alt={windowItem.title}
+            zoom={photoView.zoom}
+            rotation={photoView.rotation}
+          />
+        ) : (
+          <div className="media-empty-state">
+            <strong>Vista suspendida</strong>
+            <p>La imagen completa se monta cuando esta ventana vuelve a estar activa.</p>
+            <div className="media-actions">
+              <button type="button" onClick={() => focusWindow(windowItem.id)}>
+                Activar ventana
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -6149,6 +7744,7 @@ function App() {
   function renderVideoContent(windowItem: WindowState) {
     const mediaPath = windowItem.mediaPath
     const playback = videoPlaybackState[windowItem.id] ?? { playing: false, muted: false, rate: 1 }
+    const isActiveHeavyWindow = !initialLowEndDevice || activeWindow?.id === windowItem.id
     if (!mediaPath) {
       return (
         <div className="media-view video-view">
@@ -6175,17 +7771,29 @@ function App() {
             <button type="button" onClick={() => void revealSystemPath(mediaPath)}>
               Mostrar en carpeta
             </button>
-            <button type="button" onClick={() => void openSystemPath(mediaPath)}>
+            <button type="button" onClick={() => void openTrackedSystemPath(mediaPath, windowItem.title)}>
               Abrir con el sistema
             </button>
           </div>
           <span className="media-path">{`${playback.playing ? 'Reproduciendo' : 'Pausado'} · ${playback.muted ? 'Mute' : 'Audio'} · x${playback.rate} · ${mediaPath}`}</span>
         </div>
-        <VideoPlayer
-          src={getMediaSource(mediaPath)}
-          videoRef={(node) => registerVideoElement(windowItem.id, node)}
-          onPlaybackStateChange={() => updateVideoPlaybackMeta(windowItem.id)}
-        />
+        {isActiveHeavyWindow ? (
+          <VideoPlayer
+            src={getMediaSource(mediaPath)}
+            videoRef={(node) => registerVideoElement(windowItem.id, node)}
+            onPlaybackStateChange={() => updateVideoPlaybackMeta(windowItem.id)}
+          />
+        ) : (
+          <div className="media-empty-state">
+            <strong>Video en pausa</strong>
+            <p>En hardware limitado el reproductor solo se monta en la ventana activa.</p>
+            <div className="media-actions">
+              <button type="button" onClick={() => focusWindow(windowItem.id)}>
+                Activar ventana
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -6267,28 +7875,25 @@ function App() {
           <strong className="login-clock-time">{clock.loginTime}</strong>
         </div>
         <div className={`login-panel${loginTransitioning ? ' exiting' : ''}`}>
-          <div className="avatar-shell">
-            {deviceInfo?.userAvatar ? (
-              <img className="login-avatar-image" src={deviceInfo.userAvatar} alt={deviceInfo.userName} />
-            ) : (
-              <span>{(deviceInfo?.userName?.trim()[0] || 'M').toUpperCase()}</span>
-            )}
-          </div>
-          <p className="welcome-tag">Mactorno</p>
-          <h1>{deviceInfo?.userName ?? 'Usuario local'}</h1>
-          <p className="welcome-copy">
-            {deviceInfo
-              ? `Sesion de ${deviceInfo.osName}. Haz clic para entrar al escritorio.`
-              : 'Pantalla de acceso inspirada en macOS. Haz clic para entrar al escritorio.'}
-          </p>
           <button
             type="button"
-            className="login-enter-button"
+            className="login-avatar-button"
             onClick={() => setLoginTransitioning(true)}
             disabled={loginTransitioning}
+            aria-label={`Entrar como ${deviceInfo?.userName ?? 'Usuario local'}`}
           >
-            Ingresar
+            <span className="avatar-shell">
+              {deviceInfo?.userAvatar ? (
+                <img className="login-avatar-image" src={deviceInfo.userAvatar} alt={deviceInfo.userName} />
+              ) : (
+                <span>{(deviceInfo?.userName?.trim()[0] || 'M').toUpperCase()}</span>
+              )}
+            </span>
           </button>
+          <h1>{deviceInfo?.userName ?? 'Usuario local'}</h1>
+          <p className="login-access-copy">
+            {deviceInfo ? 'Touch ID o presiona el avatar' : 'Haz clic en el avatar para entrar'}
+          </p>
         </div>
       </main>
     )
@@ -6296,7 +7901,7 @@ function App() {
 
   return (
     <main
-      className={`desktop-shell appearance-${appearanceMode}${visibleWindowCount > 1 ? ' desktop-heavy-windows' : ''}`}
+      className={`desktop-shell appearance-${appearanceMode} performance-${resolvedPerformanceProfile} performance-mode-${performanceMode}${visibleWindowCount > 1 ? ' desktop-heavy-windows' : ''}`}
       style={{ '--desktop-background': desktopWallpaperBackground } as CSSProperties}
     >
       <header className="menu-bar">
@@ -6313,7 +7918,7 @@ function App() {
           {activeApp.menu.map((item) => {
             const actions = getAppMenuActions(activeWindow, item)
             if (actions.length === 0) {
-              return <span key={item}>{item}</span>
+              return null
             }
 
             return (
@@ -6346,28 +7951,71 @@ function App() {
           })}
         </div>
         <div className="menu-right">
+          <div className="menu-status-group" ref={statusMenusRef}>
+            <div className="menu-entry-wrap status-menu-wrap">
+            <button
+              type="button"
+              className={`menu-status-button${statusMenuOpen === 'wifi' ? ' open' : ''}`}
+              onMouseDown={(event) => {
+                event.stopPropagation()
+              }}
+              onClick={(event) => {
+                event.stopPropagation()
+                setPowerMenuOpen(false)
+                setControlCenterOpen(false)
+                setStatusMenuOpen((current) => (current === 'wifi' ? null : 'wifi'))
+              }}
+              aria-label="Estado de Wi-Fi"
+              title={wifiStatusSummary}
+            >
+              {renderWifiIcon()}
+            </button>
+            {statusMenuOpen === 'wifi' ? renderStatusMenu('wifi') : null}
+            </div>
+            <div className="menu-entry-wrap status-menu-wrap">
+            <button
+              type="button"
+              className={`menu-status-button${statusMenuOpen === 'bluetooth' ? ' open' : ''}`}
+              onMouseDown={(event) => {
+                event.stopPropagation()
+              }}
+              onClick={(event) => {
+                event.stopPropagation()
+                setPowerMenuOpen(false)
+                setControlCenterOpen(false)
+                setStatusMenuOpen((current) => (current === 'bluetooth' ? null : 'bluetooth'))
+              }}
+              aria-label="Estado de Bluetooth"
+              title={bluetoothStatusSummary}
+            >
+              {renderBluetoothIcon()}
+            </button>
+            {statusMenuOpen === 'bluetooth' ? renderStatusMenu('bluetooth') : null}
+            </div>
+          </div>
           <button
             type="button"
             className="control-center-toggle"
             onMouseDown={(event) => {
               event.stopPropagation()
             }}
-            onClick={(event) => {
-              event.stopPropagation()
-              setControlCenterOpen((current) => !current)
-            }}
+              onClick={(event) => {
+                event.stopPropagation()
+                setStatusMenuOpen(null)
+                setControlCenterOpen((current) => !current)
+              }}
             aria-label="Abrir centro de control"
-          >
-            <span className="control-center-icon" aria-hidden="true">
-              <span className="control-center-line line-top">
-                <span className="control-center-knob" />
+            >
+              <span className="control-center-icon" aria-hidden="true">
+                <span className="control-center-line line-top">
+                  <span className="control-center-knob" />
+                </span>
+                <span className="control-center-line line-bottom">
+                  <span className="control-center-knob" />
+                </span>
               </span>
-              <span className="control-center-line line-bottom">
-                <span className="control-center-knob" />
-              </span>
-            </span>
-          </button>
-          <span>{deviceInfo ? deviceInfo.osName : 'Localhost'}</span>
+              {notificationUnreadCount ? <span className="control-center-badge">{notificationUnreadCount > 9 ? '9+' : notificationUnreadCount}</span> : null}
+            </button>
           <span>{clock.menu}</span>
           <div className="menu-entry-wrap power-menu-wrap" ref={powerMenuRef}>
             <button
@@ -6378,6 +8026,7 @@ function App() {
               }}
               onClick={(event) => {
                 event.stopPropagation()
+                setStatusMenuOpen(null)
                 setPowerMenuOpen((current) => !current)
               }}
               aria-label="Opciones de energía"
@@ -6396,16 +8045,88 @@ function App() {
       </header>
 
       {renderControlCenter()}
+      <div className="toast-stack" aria-live="polite" aria-atomic="true">
+        <AnimatePresence>
+          {toasts.map((toast) => (
+            <motion.div
+              key={toast.id}
+              className="toast-card"
+              initial={{ opacity: 0, y: 12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.98 }}
+              transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <div className="toast-copy">
+                <strong>{toast.title}</strong>
+                {toast.detail ? <span>{toast.detail}</span> : null}
+              </div>
+              <button type="button" onClick={() => dismissToast(toast.id)} aria-label={`Cerrar aviso ${toast.title}`}>
+                ×
+              </button>
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
+      <AnimatePresence>
+        {altTabState.open && altTabCandidates.length > 0 ? (
+          <motion.div
+            className="alt-tab-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.14 }}
+          >
+            <motion.div
+              className="alt-tab-panel"
+              initial={{ opacity: 0, y: 10, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 8, scale: 0.98 }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+            >
+              {altTabCandidates.map((item, index) => {
+                const app = getResolvedApp(item.appId)
+                const isSelected = altTabState.selectedIndex === index
+                const title = getWindowDisplayTitle(item)
+
+                return (
+                  <div key={item.id} className={`alt-tab-item${isSelected ? ' active' : ''}`}>
+                    <div className="alt-tab-icon" style={{ background: app.accent }}>
+                      {renderDockIconContent(app.iconSpec)}
+                    </div>
+                    <strong>{app.name}</strong>
+                    <span>{title}</span>
+                  </div>
+                )
+              })}
+            </motion.div>
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+      {renderMissionControl()}
 
       <section
         className="desktop-canvas"
+        onMouseDown={(event) => {
+          const target = event.target as HTMLElement
+          if (!target.closest('.desktop-item-icon, .desktop-volume-icon, .desktop-trash-icon, .app-window, .finder-file-tile, .finder-file-row, .finder-folder-tile')) {
+            updateQuickLookCandidate(null)
+          }
+        }}
         onDragOver={(event) => {
+          if (parseDesktopItemDragPayload(event.dataTransfer.getData(DESKTOP_ITEM_DRAG_MIME))) {
+            handleDesktopItemRootDragOver(event)
+            return
+          }
           if (parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))) {
             event.preventDefault()
             event.dataTransfer.dropEffect = 'copy'
           }
         }}
         onDrop={(event) => {
+          if (parseDesktopItemDragPayload(event.dataTransfer.getData(DESKTOP_ITEM_DRAG_MIME))) {
+            handleDesktopItemRootDrop(event, null, { x: event.clientX, y: event.clientY })
+            return
+          }
           const entry = parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))
           if (!entry) {
             return
@@ -6452,168 +8173,28 @@ function App() {
             openContextMenuAt({ type: 'trash' }, event.clientX, event.clientY)
           }}
         >
-          <img className="desktop-item-art trash" src={trashItems.length ? '/trash2.png' : '/trash.png'} alt="" draggable={false} />
+          <img className="desktop-item-art trash" src={resolvePublicAssetPath(trashItems.length ? '/trash2.png' : '/trash.png')} alt="" draggable={false} />
           <strong>Papelera</strong>
           <span>{trashItems.length ? `${trashItems.length} item${trashItems.length === 1 ? '' : 's'}` : 'Vacia'}</span>
         </button>
 
-        {rootDesktopItems.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className="desktop-item-icon"
-            data-desktop-folder-id={item.kind === 'folder' ? item.id : undefined}
-            style={{ left: item.x, top: item.y }}
-            onPointerDown={(event) => startDesktopItemDrag(event, item.id)}
-            onClick={(event) => {
-              if (editingDesktopItemId === item.id) {
-                return
-              }
-              if (event.detail < 2) {
-                return
-              }
-              if (item.kind === 'folder') {
-                openDesktopFolder(item.id)
-              } else if (item.kind === 'text') {
-                openDesktopDocument(item.id)
-              } else {
-                openDesktopFileItem(item.id)
-              }
-            }}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              openContextMenuAt({
-                type: 'desktop-item',
-                itemId: item.id,
-                label: item.name,
-                kind: item.kind,
-              }, event.clientX, event.clientY)
-            }}
-            onDragOver={(event) => {
-              if (item.kind === 'folder' && parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))) {
-                event.preventDefault()
-                event.dataTransfer.dropEffect = 'copy'
-              }
-            }}
-            onDrop={(event) => {
-              if (item.kind !== 'folder') {
-                return
-              }
-              const entry = parseVolumeEntryPayload(event.dataTransfer.getData('application/x-mactorno-volume-entry'))
-              if (!entry) {
-                return
-              }
-              event.preventDefault()
-              event.stopPropagation()
-              importVolumeEntryToDesktop(entry, item.id)
-            }}
-          >
-            {item.kind === 'folder' ? (
-              <span className="desktop-item-art folder" aria-hidden="true" />
-            ) : item.kind === 'file' && item.sourcePath && isImageEntry({
-              name: item.name,
-              path: item.sourcePath,
-              kind: 'file',
-              extension: item.extension,
-              sizeBytes: null,
-            }) ? (
-              <img className="desktop-item-art image-preview" src={getMediaSource(item.sourcePath)} alt="" draggable={false} />
-            ) : item.kind === 'file' && item.sourcePath && isVideoEntry({
-              name: item.name,
-              path: item.sourcePath,
-              kind: 'file',
-              extension: item.extension,
-              sizeBytes: null,
-            }) ? (
-              <video
-                className="desktop-item-art video-preview"
-                src={getMediaSource(item.sourcePath)}
-                muted
-                playsInline
-                preload="metadata"
-                draggable={false}
-                onLoadedMetadata={(event) => {
-                  const video = event.currentTarget
-                  if (video.duration > 0.12) {
-                    video.currentTime = 0.12
-                  }
-                }}
-              />
-            ) : item.kind === 'file' && item.iconDataUrl ? (
-              <img className="desktop-item-art custom-icon" src={item.iconDataUrl} alt="" draggable={false} />
-            ) : (
-              <img className="desktop-item-art text" src="/texto.png" alt="" draggable={false} />
-            )}
-            {editingDesktopItemId === item.id ? (
-              <input
-                className="desktop-item-name-input"
-                value={editingDesktopItemName}
-                autoFocus
-                onChange={(event) => setEditingDesktopItemName(event.target.value)}
-                onClick={(event) => event.stopPropagation()}
-                onDoubleClick={(event) => event.stopPropagation()}
-                onBlur={() => commitDesktopItemRename(item.id)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    event.preventDefault()
-                    commitDesktopItemRename(item.id)
-                  }
-                  if (event.key === 'Escape') {
-                    event.preventDefault()
-                    cancelDesktopItemRename()
-                  }
-                }}
-              />
-            ) : (
-              <strong>{item.name}</strong>
-            )}
-            <span>{item.kind === 'folder' ? 'Carpeta' : item.kind === 'text' ? 'Documento' : item.extension || 'Archivo'}</span>
-          </button>
-        ))}
+        {desktopItemNodes}
 
-        {deviceInfo?.volumes.map((volume, index) => {
-          const position = getDesktopVolumePosition(volume, index)
-          return (
-            <button
-              key={volume.mount}
-              type="button"
-            className="desktop-volume-icon"
-            style={{ left: position.x, top: position.y }}
-            onPointerDown={(event) => startDesktopVolumeDrag(event, volume.mount)}
-            onClick={() => openDesktopVolume(volume.mount)}
-            onContextMenu={(event) => {
-              event.preventDefault()
-              event.stopPropagation()
-              openContextMenuAt({
-                type: 'dock-volume',
-                mount: volume.mount,
-                label: volume.name,
-              }, event.clientX, event.clientY)
-            }}
-          >
-              <img
-                className={`desktop-volume-art ${getDesktopVolumeKind(volume)}`}
-                src={getDesktopVolumeIconSrc(volume)}
-                alt=""
-                draggable={false}
-              />
-              <strong>{volume.name}</strong>
-              <span>{formatVolumeLabel(volume.mount)}</span>
-            </button>
-          )
-        })}
+        {desktopVolumeNodes}
 
-        {windows
-          .filter((item) => !item.minimized)
-          .sort((left, right) => left.zIndex - right.zIndex)
-          .map((item) => {
+        {visibleWindows.map((item) => {
             const app = getResolvedApp(item.appId)
             const isActive = activeWindow?.id === item.id
-            const title =
-              item.appId === 'finder'
-                ? `Finder · ${getFinderRouteLabel(getActiveFinderRoute(item.finderState))}`
-                : item.title
+            const isMorphingWindow = windowMorphIds.includes(item.id)
+            const windowStyle: CSSProperties & { '--window-resize-duration': string } = {
+              width: item.width,
+              height: item.height,
+              transform: `translate(${item.x}px, ${item.y}px)`,
+              zIndex: item.zIndex,
+              borderRadius: item.maximized ? 0 : WINDOW_RADIUS,
+              '--window-resize-duration': `${maximizeAnimationDurationMs}ms`,
+            }
+            const title = getWindowDisplayTitle(item)
             const safariBrowserState = item.appId === 'safari' ? item.browserState : null
             const safariCanGoBack = safariBrowserState ? safariBrowserState.historyIndex > 0 : false
             const safariCanGoForward = safariBrowserState
@@ -6629,14 +8210,8 @@ function App() {
             return (
               <article
                 key={item.id}
-                className={`app-window app-${item.appId}${isActive ? ' active' : ''}${item.genie ? ' is-genie' : ''}${item.maximized ? ' maximized' : ''}`}
-                style={{
-                  width: item.width,
-                  height: item.height,
-                  transform: `translate(${item.x}px, ${item.y}px)`,
-                  zIndex: item.zIndex,
-                  borderRadius: item.maximized ? 0 : WINDOW_RADIUS,
-                }}
+                className={`app-window app-${item.appId}${isActive ? ' active' : ''}${item.genie ? ' is-genie' : ''}${item.maximized ? ' maximized' : ''}${isMorphingWindow ? ' is-morphing' : ''}`}
+                style={windowStyle}
                 onPointerDown={() => focusWindow(item.id)}
                 ref={(node) => {
                   windowRefs.current[item.id] = node
@@ -6732,9 +8307,9 @@ function App() {
                             type="button"
                             className="browser-icon-button"
                             onPointerDown={(event) => event.stopPropagation()}
-                            onClick={() => openSafariWindow()}
-                            aria-label="Nueva ventana"
-                            title="Nueva ventana"
+                            onClick={() => openBrowserTab(item.id)}
+                            aria-label="Nueva pestana"
+                            title="Nueva pestana"
                           >
                             +
                           </button>
@@ -7009,6 +8584,43 @@ function App() {
         </div>
       ) : null}
 
+      {contextMenu?.type === 'dock-transient' ? (
+        <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
+          <button
+            type="button"
+            onClick={() => {
+              const item = visibleTransientDockItems.find((entry) => entry.id === contextMenu.itemId)
+              if (item) {
+                void activateCustomDockItem(item)
+              }
+              setContextMenu(null)
+            }}
+          >
+            Abrir {contextMenu.label}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              pinTransientDockItem(contextMenu.itemId)
+              setContextMenu(null)
+            }}
+          >
+            Mantener en dock
+          </button>
+          {runtimeDockItems.some((item) => item.id === contextMenu.itemId) ? (
+            <button
+              type="button"
+              onClick={() => {
+                dismissRuntimeDockItem(contextMenu.itemId)
+                setContextMenu(null)
+              }}
+            >
+              Quitar del dock
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+
       {contextMenu?.type === 'dock-volume' ? (
         <div className="context-menu" style={{ left: contextMenu.x, top: contextMenu.y }}>
           <button
@@ -7032,14 +8644,21 @@ function App() {
         </div>
       ) : null}
 
-      {renderLauncherPopup()}
+        {renderLauncherPopup()}
+        {renderQuickLook()}
+        {renderSpotlight()}
+        {renderSystemDialog()}
+        {renderDockFolderStack()}
 
-      <footer className="dock-wrap">
+        <footer className="dock-wrap">
         <motion.div
           className="dock"
           ref={dockRef}
           onMouseEnter={() => {
             measureDockCenters()
+            if (!dockHoverAnimationEnabled) {
+              dockMouseX.set(Infinity)
+            }
           }}
           onMouseMove={(event) => {
             queueDockMouseUpdate(event.pageX)
@@ -7054,10 +8673,11 @@ function App() {
           }}
           onDragOver={(event) => {
             event.preventDefault()
-            event.dataTransfer.dropEffect = 'copy'
+            event.dataTransfer.dropEffect = dockDragItemIdRef.current ? 'move' : 'copy'
           }}
           onDrop={(event) => {
             event.preventDefault()
+            dockDragItemIdRef.current = null
             const payload = event.dataTransfer.getData('application/json')
             if (!payload) {
               return
@@ -7073,9 +8693,11 @@ function App() {
             }
           }}
         >
-          {visibleDockAppIds.map((appId) => {
+          {orderedDockAppIds.map((appId) => {
             const app = getResolvedApp(appId)
             const isOpen = openAppIds.has(app.id)
+            const dockPinnedId = getDockPinnedAppKey(app.id)
+            const isPinned = dockItems.includes(app.id)
             return (
               <DockIconButton
                 key={app.id}
@@ -7086,8 +8708,31 @@ function App() {
                 isOpen={isOpen}
                 mouseX={dockMouseX}
                 centerX={dockCenters[app.id] ?? -9999}
+                motionProfile={resolvedPerformanceProfile}
                 onActivate={() => openApp(app.id)}
                 registerRef={registerDockItemRef}
+                draggable={isPinned}
+                onDragStart={(event) => {
+                  if (!isPinned) {
+                    return
+                  }
+                  dockDragItemIdRef.current = dockPinnedId
+                  event.dataTransfer.setData('text/plain', dockPinnedId)
+                  event.dataTransfer.effectAllowed = 'move'
+                }}
+                onDragOver={(event) => {
+                  if (!dockDragItemIdRef.current || !isPinned) {
+                    return
+                  }
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  reorderDockPinnedItems(dockPinnedId)
+                }}
+                onDragEnd={(event) => handleDockIconDragEnd(event, app.id, false)}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  reorderDockPinnedItems(dockPinnedId)
+                }}
                 onContextMenu={(event) => {
                   event.preventDefault()
                   openContextMenuAt({
@@ -7099,7 +8744,11 @@ function App() {
               />
             )
           })}
-          {customDockItems.map((item) => (
+          {orderedCustomDockItems.map((item) => {
+            const dockPinnedId = getDockPinnedCustomKey(item.id)
+            const stackEntries = getDockFolderStackEntries(item)
+
+            return (
             <DockIconButton
               key={item.id}
               id={item.id}
@@ -7109,7 +8758,12 @@ function App() {
               isOpen={false}
               mouseX={dockMouseX}
               centerX={dockCenters[item.id] ?? -9999}
+              motionProfile={resolvedPerformanceProfile}
               onActivate={() => {
+                if (stackEntries?.length) {
+                  setDockFolderStackItemId((current) => current === item.id ? null : item.id)
+                  return
+                }
                 void activateCustomDockItem(item)
               }}
               registerRef={registerDockItemRef}
@@ -7123,10 +8777,54 @@ function App() {
               }}
               draggable
               onDragStart={(event) => {
-                event.dataTransfer.setData('text/plain', item.id)
+                dockDragItemIdRef.current = dockPinnedId
+                event.dataTransfer.setData('text/plain', dockPinnedId)
                 event.dataTransfer.effectAllowed = 'move'
               }}
+              onDragOver={(event) => {
+                if (!dockDragItemIdRef.current) {
+                  return
+                }
+                event.preventDefault()
+                event.dataTransfer.dropEffect = 'move'
+                reorderDockPinnedItems(dockPinnedId)
+              }}
               onDragEnd={(event) => handleDockIconDragEnd(event, item.id, true)}
+              onDrop={(event) => {
+                event.preventDefault()
+                reorderDockPinnedItems(dockPinnedId)
+              }}
+              />
+            )
+          })}
+          {visibleTransientDockItems.map((item) => (
+            <DockIconButton
+              key={item.id}
+              id={item.id}
+              name={item.name}
+              accent={item.accent}
+              icon={item.icon}
+              isOpen
+              mouseX={dockMouseX}
+              centerX={dockCenters[item.id] ?? -9999}
+              motionProfile={resolvedPerformanceProfile}
+              onActivate={() => {
+                const stackEntries = getDockFolderStackEntries(item)
+                if (stackEntries?.length) {
+                  setDockFolderStackItemId((current) => current === item.id ? null : item.id)
+                  return
+                }
+                void activateCustomDockItem(item)
+              }}
+              registerRef={registerDockItemRef}
+              onContextMenu={(event) => {
+                event.preventDefault()
+                openContextMenuAt({
+                  type: 'dock-transient',
+                  itemId: item.id,
+                  label: item.name,
+                }, event.clientX, event.clientY)
+              }}
             />
           ))}
           {visibleVolumeDockItems.map((item) => (
@@ -7139,6 +8837,7 @@ function App() {
               isOpen
               mouseX={dockMouseX}
               centerX={dockCenters[item.id] ?? -9999}
+              motionProfile={resolvedPerformanceProfile}
               onActivate={() => {
                 void activateCustomDockItem(item)
               }}
